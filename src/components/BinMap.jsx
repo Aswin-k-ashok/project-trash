@@ -80,7 +80,39 @@ function getSupabaseErrorMessage(error, fallbackMessage) {
     return "Supabase cannot find the 'bins' table. Run the SQL from supabase/schema.sql in your Supabase SQL Editor, then refresh the app.";
   }
 
+  const missingColumnMatch = error.message?.match(
+    /Could not find the '([^']+)' column of 'bins' in the schema cache/i
+  );
+
+  if (missingColumnMatch) {
+    const missingColumn = missingColumnMatch[1];
+
+    return `Your Supabase 'bins' table is missing the '${missingColumn}' column. Run the latest SQL from supabase/schema.sql in the Supabase SQL Editor, then try again after the schema cache refreshes.`;
+  }
+
   return error.message || fallbackMessage;
+}
+
+function getMissingBinColumn(error) {
+  const missingColumnMatch = error?.message?.match(
+    /Could not find the '([^']+)' column of 'bins' in the schema cache/i
+  );
+
+  return missingColumnMatch ? missingColumnMatch[1] : null;
+}
+
+function buildBinPayload(draftBin, includeOptionalFields = true) {
+  const payload = {
+    latitude: draftBin.latitude,
+    longitude: draftBin.longitude,
+  };
+
+  if (includeOptionalFields) {
+    payload.title = draftBin.title.trim() || null;
+    payload.description = draftBin.description.trim() || null;
+  }
+
+  return payload;
 }
 
 function BinMap() {
@@ -229,20 +261,33 @@ function BinMap() {
     setIsSaving(true);
     setErrorMessage('');
 
-    const payload = {
-      latitude: draftBin.latitude,
-      longitude: draftBin.longitude,
-      title: draftBin.title.trim() || null,
-      description: draftBin.description.trim() || null,
-    };
-
     const { data, error } = await supabase
       .from('bins')
-      .insert(payload)
+      .insert(buildBinPayload(draftBin))
       .select()
       .single();
 
     if (error) {
+      const missingColumn = getMissingBinColumn(error);
+
+      if (missingColumn === 'title' || missingColumn === 'description') {
+        const legacyInsert = await supabase
+          .from('bins')
+          .insert(buildBinPayload(draftBin, false))
+          .select()
+          .single();
+
+        if (!legacyInsert.error) {
+          setBins((currentBins) => [legacyInsert.data, ...currentBins]);
+          setDraftBin(null);
+          setErrorMessage(
+            `The bin was saved, but your Supabase table is still missing the '${missingColumn}' column. Run supabase/schema.sql so titles and descriptions can be stored too.`
+          );
+          setIsSaving(false);
+          return;
+        }
+      }
+
       setErrorMessage(
         getSupabaseErrorMessage(
           error,
