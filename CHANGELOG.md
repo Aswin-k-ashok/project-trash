@@ -2,6 +2,8 @@
 
 All notable changes to this waste bin locator project are documented in this file.
 
+Last updated: 2026-04-09 23:37:29 +0530
+
 ## [Unreleased]
 
 ### Added
@@ -33,6 +35,7 @@ All notable changes to this waste bin locator project are documented in this fil
 - Fixed the startup white-screen issue caused by missing Supabase environment variables.
 - Fixed the app to show user-friendly setup messages instead of crashing when env vars are absent.
 - Improved the UX around Supabase API errors by showing more specific guidance for schema issues.
+- Fixed bin saves against older Supabase schemas by falling back to coordinate-only inserts and showing a clearer missing-column message.
 
 ### Notes
 - The app is designed around a zero-cost hobby stack:
