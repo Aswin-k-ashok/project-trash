@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   MapContainer,
   Marker,
@@ -80,6 +81,13 @@ function MapController({ targetLocation }) {
   return null;
 }
 
+function FullscreenMapPortal({ children }) {
+  return createPortal(
+    <div className="map-fullscreen-portal">{children}</div>,
+    document.body
+  );
+}
+
 function getSupabaseErrorMessage(error, fallbackMessage) {
   if (!error) {
     return fallbackMessage;
@@ -151,6 +159,7 @@ function BinMap() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isLocating, setIsLocating] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const [isSubmittingFeedback, setIsSubmittingFeedback] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [mapCenter, setMapCenter] = useState(DEFAULT_CENTER);
@@ -258,6 +267,19 @@ function BinMap() {
       window.clearTimeout(timeoutId);
     };
   }, [mapCenter]);
+
+  useEffect(() => {
+    if (!isFullscreen) {
+      return undefined;
+    }
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [isFullscreen]);
 
   function markNewBin(latlng) {
     if (!isSupabaseConfigured) {
@@ -498,84 +520,26 @@ function BinMap() {
     );
   }
 
-  return (
-    <div className="map-wrapper">
-      <div className="toolbar">
-        <div>
-          <h2>Current Area: {placeName}</h2>
-          <p>Tap the map to add a waste bin. No paperwork required.</p>
-        </div>
-        <div className="status-group">
-          {isLoading && <span className="status">Loading bins...</span>}
-          {isSaving && <span className="status">Saving new bin...</span>}
-          {isLocating && <span className="status">Finding your location...</span>}
-        </div>
-      </div>
+  function toggleFullscreen() {
+    setIsFullscreen((currentValue) => !currentValue);
+  }
 
-      {errorMessage && <p className="error-banner">{errorMessage}</p>}
-
-      {draftBin && (
-        <form className="bin-form" onSubmit={handleSaveDraftBin}>
-          <div className="bin-form-header">
-            <h3>Add New Bin</h3>
-            <p>
-              {draftBin.latitude.toFixed(5)}, {draftBin.longitude.toFixed(5)}
-            </p>
-          </div>
-
-          <label className="field">
-            <span>Bin Type</span>
-            <select
-              name="binType"
-              value={draftBin.binType}
-              onChange={handleDraftChange}
-            >
-              <option value={BIN_TYPE_PUBLIC}>Public</option>
-              <option value={BIN_TYPE_PRIVATE}>Private</option>
-            </select>
-          </label>
-
-          <label className="field">
-            <span>Title</span>
-            <input
-              type="text"
-              name="title"
-              value={draftBin.title}
-              onChange={handleDraftChange}
-              placeholder="Example: Near bus stop"
-            />
-          </label>
-
-          <label className="field">
-            <span>Description</span>
-            <textarea
-              name="description"
-              value={draftBin.description}
-              onChange={handleDraftChange}
-              rows="3"
-              placeholder="Add any details that help identify this bin"
-            />
-          </label>
-
-          <div className="form-actions">
-            <button
-              type="button"
-              className="button button-secondary"
-              onClick={handleCancelDraft}
-            >
-              Cancel
-            </button>
-            <button type="submit" className="button" disabled={isSaving}>
-              {isSaving ? 'Saving...' : 'Save Bin'}
-            </button>
-          </div>
-        </form>
-      )}
-
+  function renderMapStage() {
+    return (
       <div className="map-stage">
         <button
           type="button"
-          className="locate-button"
+          className="map-control-button maximize-button"
+          onClick={toggleFullscreen}
+          aria-label={isFullscreen ? 'Exit full screen map' : 'Maximize map'}
+          title={isFullscreen ? 'Exit full screen map' : 'Maximize map'}
+        >
+          <span className="maximize-button__icon" aria-hidden="true"></span>
+        </button>
+
+        <button
+          type="button"
+          className="map-control-button locate-button"
           onClick={handleLocateMe}
           disabled={isLocating}
           aria-label={isLocating ? 'Locating your position' : 'Locate me'}
@@ -725,7 +689,93 @@ function BinMap() {
           ))}
         </MapContainer>
       </div>
-    </div>
+    );
+  }
+
+  return (
+    <>
+      <div className={`map-wrapper${isFullscreen ? ' map-wrapper--fullscreen' : ''}`}>
+        <div className="toolbar">
+          <div>
+            <h2>Current Area: {placeName}</h2>
+            <p>Tap the map to add a waste bin. No paperwork required.</p>
+          </div>
+          <div className="status-group">
+            {isLoading && <span className="status">Loading bins...</span>}
+            {isSaving && <span className="status">Saving new bin...</span>}
+            {isLocating && <span className="status">Finding your location...</span>}
+          </div>
+        </div>
+
+        {errorMessage && <p className="error-banner">{errorMessage}</p>}
+
+        {draftBin && (
+          <form className="bin-form" onSubmit={handleSaveDraftBin}>
+            <div className="bin-form-header">
+              <h3>Add New Bin</h3>
+              <p>
+                {draftBin.latitude.toFixed(5)}, {draftBin.longitude.toFixed(5)}
+              </p>
+            </div>
+
+            <label className="field">
+              <span>Bin Type</span>
+              <select
+                name="binType"
+                value={draftBin.binType}
+                onChange={handleDraftChange}
+              >
+                <option value={BIN_TYPE_PUBLIC}>Public</option>
+                <option value={BIN_TYPE_PRIVATE}>Private</option>
+              </select>
+            </label>
+
+            <label className="field">
+              <span>Title</span>
+              <input
+                type="text"
+                name="title"
+                value={draftBin.title}
+                onChange={handleDraftChange}
+                placeholder="Example: Near bus stop"
+              />
+            </label>
+
+            <label className="field">
+              <span>Description</span>
+              <textarea
+                name="description"
+                value={draftBin.description}
+                onChange={handleDraftChange}
+                rows="3"
+                placeholder="Add any details that help identify this bin"
+              />
+            </label>
+
+            <div className="form-actions">
+              <button
+                type="button"
+                className="button button-secondary"
+                onClick={handleCancelDraft}
+              >
+                Cancel
+              </button>
+              <button type="submit" className="button" disabled={isSaving}>
+                {isSaving ? 'Saving...' : 'Save Bin'}
+              </button>
+            </div>
+          </form>
+        )}
+
+        {!isFullscreen && renderMapStage()}
+      </div>
+
+      {isFullscreen && (
+        <FullscreenMapPortal>
+          <div className="map-wrapper map-wrapper--fullscreen">{renderMapStage()}</div>
+        </FullscreenMapPortal>
+      )}
+    </>
   );
 }
 
