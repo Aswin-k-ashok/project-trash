@@ -123,6 +123,7 @@ select:focus-visible {
   align-content: start;
   min-height: clamp(280px, 42vh, 420px);
   padding-top: 32px;
+  padding-right: 168px;
   margin-bottom: 20px;
   z-index: 1;
 }
@@ -144,12 +145,20 @@ select:focus-visible {
   z-index: 1;
 }
 
+.hero-topline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
 .eyebrow,
 .map-card__eyebrow {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  margin: 0 0 10px;
+  margin: 0;
   padding: 6px 12px;
   border-radius: 999px;
   background: var(--primary-soft);
@@ -158,6 +167,69 @@ select:focus-visible {
   font-weight: 700;
   letter-spacing: 0.04em;
   text-transform: uppercase;
+}
+
+.hero-install-button {
+  position: absolute;
+  top: 32px;
+  right: 24px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 999px;
+  min-height: 31px;
+  padding: 6px 12px;
+  background: linear-gradient(135deg, var(--primary) 0%, var(--primary-strong) 100%);
+  color: #ffffff;
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 12px 24px rgba(111, 53, 245, 0.22);
+  transition: transform 160ms ease, box-shadow 160ms ease, opacity 160ms ease;
+}
+
+.hero-install-button__icon {
+  position: relative;
+  width: 14px;
+  height: 14px;
+  margin-right: 8px;
+}
+
+.hero-install-button__icon::before,
+.hero-install-button__icon::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  background: currentColor;
+}
+
+.hero-install-button__icon::before {
+  top: 0;
+  width: 2px;
+  height: 9px;
+  border-radius: 999px;
+}
+
+.hero-install-button__icon::after {
+  bottom: 0;
+  width: 10px;
+  height: 6px;
+  clip-path: polygon(50% 100%, 0 0, 100% 0);
+}
+
+.hero-install-button__label {
+  display: inline-flex;
+}
+
+.hero-install-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 14px 26px rgba(111, 53, 245, 0.26);
 }
 
 .hero-panel h1,
@@ -700,25 +772,69 @@ select:focus-visible {
 }
 
 .popup-content {
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
   color: var(--text);
+}
+
+.popup-content__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
 }
 
 .popup-content strong {
   color: var(--text-strong);
+  font-size: 1rem;
+  line-height: 1.2;
 }
 
-.popup-content p {
-  margin: 8px 0 6px;
+.popup-content__description {
+  margin: 0;
+  color: var(--text);
+  line-height: 1.5;
+}
+
+.popup-content__meta {
+  display: grid;
+  gap: 4px;
+  padding-top: 2px;
+  border-top: 1px solid rgba(65, 45, 90, 0.08);
+}
+
+.popup-content__label {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.popup-content__meta small {
+  color: var(--text);
 }
 
 .popup-bin-type {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: fit-content;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: var(--primary-soft);
   font-weight: 600;
   color: var(--primary-strong);
+  font-size: 0.8rem;
 }
 
 .popup-button {
   display: inline-flex;
-  margin-top: 10px;
+  width: 100%;
+  justify-content: center;
+  margin-top: 2px;
 }
 
 @media (max-width: 900px) {
@@ -757,12 +873,41 @@ select:focus-visible {
     padding: 22px 18px;
     gap: 18px;
     min-height: auto;
+    padding-right: 18px;
     margin-bottom: 16px;
   }
 
   .hero-panel h1 {
     max-width: 100%;
     font-size: clamp(2rem, 9vw, 3rem);
+  }
+
+  .hero-topline {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .hero-install-button {
+    position: static;
+    top: auto;
+    right: auto;
+    width: 31px;
+    height: 31px;
+    min-height: 31px;
+    padding: 0;
+    border-radius: 999px;
+    margin-left: auto;
+    justify-content: center;
+    flex: 0 0 auto;
+    box-shadow: 0 10px 20px rgba(111, 53, 245, 0.2);
+  }
+
+  .hero-install-button__icon {
+    margin-right: 0;
+  }
+
+  .hero-install-button__label {
+    display: none;
   }
 
   .map-card {
