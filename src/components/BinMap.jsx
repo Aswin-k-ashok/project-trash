@@ -666,16 +666,23 @@ function BinMap() {
             >
               <Popup>
                 <div className="popup-content">
-                  <strong>{bin.title || 'Waste bin'}</strong>
-                  <p>{bin.description || 'No description added.'}</p>
-                  <p className="popup-bin-type">
-                    {getBinType(bin.bin_type) === BIN_TYPE_PUBLIC
-                      ? 'Public bin'
-                      : 'Private bin'}
+                  <div className="popup-content__header">
+                    <strong>{bin.title || 'Waste bin'}</strong>
+                    <span className="popup-bin-type">
+                      {getBinType(bin.bin_type) === BIN_TYPE_PUBLIC
+                        ? 'Public'
+                        : 'Private'}
+                    </span>
+                  </div>
+                  <p className="popup-content__description">
+                    {bin.description || 'No description added.'}
                   </p>
-                  <small>
-                    {bin.latitude.toFixed(5)}, {bin.longitude.toFixed(5)}
-                  </small>
+                  <div className="popup-content__meta">
+                    <span className="popup-content__label">Coordinates</span>
+                    <small>
+                      {bin.latitude.toFixed(5)}, {bin.longitude.toFixed(5)}
+                    </small>
+                  </div>
                   <button
                     type="button"
                     className="button button-danger popup-button"
