@@ -110,6 +110,18 @@ function getMissingBinColumn(error) {
   return missingColumnMatch ? missingColumnMatch[1] : null;
 }
 
+function getDeleteFailureMessage() {
+  return "The bin could not be deleted from Supabase. Run the latest SQL from supabase/schema.sql in your Supabase SQL Editor to make sure the delete policy is installed, then refresh the app.";
+}
+
+function getFeedbackErrorMessage(error) {
+  if (error?.code === 'PGRST205') {
+    return "Supabase cannot find the 'app_feedback' table. Run the latest SQL from supabase/schema.sql in your Supabase SQL Editor, then refresh the app.";
+  }
+
+  return error?.message || 'Could not submit your feedback right now.';
+}
+
 function buildBinPayload(
   draftBin,
   {
@@ -139,11 +151,18 @@ function BinMap() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [isLocating, setIsLocating] = useState(false);
+  const [isSubmittingFeedback, setIsSubmittingFeedback] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [mapCenter, setMapCenter] = useState(DEFAULT_CENTER);
   const [placeName, setPlaceName] = useState('Kochi, Kerala');
   const [draftBin, setDraftBin] = useState(null);
   const [userLocation, setUserLocation] = useState(null);
+  const [isFeedbackOpen, setIsFeedbackOpen] = useState(false);
+  const [feedbackForm, setFeedbackForm] = useState({
+    name: '',
+    feedback: '',
+  });
+  const [feedbackStatusMessage, setFeedbackStatusMessage] = useState('');
 
   useEffect(() => {
     async function loadBins() {
@@ -271,6 +290,29 @@ function BinMap() {
     setDraftBin(null);
   }
 
+  function openFeedbackForm() {
+    setFeedbackStatusMessage('');
+    setIsFeedbackOpen(true);
+  }
+
+  function closeFeedbackForm() {
+    if (isSubmittingFeedback) {
+      return;
+    }
+
+    setIsFeedbackOpen(false);
+    setFeedbackStatusMessage('');
+  }
+
+  function handleFeedbackChange(event) {
+    const { name, value } = event.target;
+
+    setFeedbackForm((currentForm) => ({
+      ...currentForm,
+      [name]: value,
+    }));
+  }
+
   async function handleSaveDraftBin(event) {
     event.preventDefault();
 
@@ -351,7 +393,11 @@ function BinMap() {
     setIsSaving(true);
     setErrorMessage('');
 
-    const { error } = await supabase.from('bins').delete().eq('id', binId);
+    const { data, error } = await supabase
+      .from('bins')
+      .delete()
+      .eq('id', binId)
+      .select('id');
 
     if (error) {
       setErrorMessage(
@@ -364,8 +410,51 @@ function BinMap() {
       return;
     }
 
+    if (!data || data.length === 0) {
+      setErrorMessage(getDeleteFailureMessage());
+      setIsSaving(false);
+      return;
+    }
+
     setBins((currentBins) => currentBins.filter((bin) => bin.id !== binId));
     setIsSaving(false);
+  }
+
+  async function handleFeedbackSubmit(event) {
+    event.preventDefault();
+
+    if (!isSupabaseConfigured) {
+      setFeedbackStatusMessage(
+        'Supabase is not configured yet. Add your environment variables before sending feedback.'
+      );
+      return;
+    }
+
+    setIsSubmittingFeedback(true);
+    setFeedbackStatusMessage('');
+
+    const { error } = await supabase.from('app_feedback').insert({
+      name: feedbackForm.name.trim() || null,
+      feedback: feedbackForm.feedback.trim(),
+    });
+
+    if (error) {
+      setFeedbackStatusMessage(getFeedbackErrorMessage(error));
+      setIsSubmittingFeedback(false);
+      return;
+    }
+
+    setFeedbackForm({
+      name: '',
+      feedback: '',
+    });
+    setFeedbackStatusMessage('Thanks for the feedback. It has been sent.');
+    setIsSubmittingFeedback(false);
+
+    window.setTimeout(() => {
+      setIsFeedbackOpen(false);
+      setFeedbackStatusMessage('');
+    }, 1200);
   }
 
   function handleLocateMe() {
@@ -415,23 +504,6 @@ function BinMap() {
         <div>
           <h2>Current Area: {placeName}</h2>
           <p>Tap the map to add a waste bin. No paperwork required.</p>
-        </div>
-        <div className="toolbar-actions">
-          <button
-            type="button"
-            className="locate-button"
-            onClick={handleLocateMe}
-            disabled={isLocating}
-            aria-label="Locate me"
-            title="Locate me"
-          >
-            <span className="locate-button__icon" aria-hidden="true">
-              <span className="locate-button__dot"></span>
-            </span>
-            <span className="locate-button__label">
-              {isLocating ? 'Locating...' : 'Locate Me'}
-            </span>
-          </button>
         </div>
         <div className="status-group">
           {isLoading && <span className="status">Loading bins...</span>}
@@ -500,68 +572,159 @@ function BinMap() {
         </form>
       )}
 
-      <MapContainer
-        center={DEFAULT_CENTER}
-        zoom={DEFAULT_ZOOM}
-        scrollWheelZoom
-        className="leaflet-map"
-      >
-        <TileLayer
-          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-          url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-        />
+      <div className="map-stage">
+        <button
+          type="button"
+          className="locate-button"
+          onClick={handleLocateMe}
+          disabled={isLocating}
+          aria-label={isLocating ? 'Locating your position' : 'Locate me'}
+          title={isLocating ? 'Locating your position' : 'Locate me'}
+        >
+          <span className="locate-button__icon" aria-hidden="true">
+            <span className="locate-button__dot"></span>
+          </span>
+        </button>
 
-        <AddBinOnClick onAdd={markNewBin} />
-        <MapCenterTracker onCenterChange={setMapCenter} />
-        <MapController targetLocation={userLocation} />
+        <button
+          type="button"
+          className="feedback-trigger"
+          onClick={openFeedbackForm}
+        >
+          Suggestion & Feedback
+        </button>
 
-        {userLocation && (
-          <Marker
-            position={[userLocation.lat, userLocation.lng]}
-            icon={userLocationIcon}
-          >
-            <Popup>
-              <div className="popup-content">
-                <strong>Your location</strong>
-                <p>This location comes from your device GPS.</p>
-                <small>
-                  {userLocation.lat.toFixed(5)}, {userLocation.lng.toFixed(5)}
-                </small>
-              </div>
-            </Popup>
-          </Marker>
-        )}
-
-        {bins.map((bin) => (
-          <Marker
-            key={bin.id}
-            position={[bin.latitude, bin.longitude]}
-            icon={createTrashBinIcon(bin.bin_type)}
-          >
-            <Popup>
-              <div className="popup-content">
-                <strong>{bin.title || 'Waste bin'}</strong>
-                <p>{bin.description || 'No description added.'}</p>
-                <p className="popup-bin-type">
-                  {getBinType(bin.bin_type) === BIN_TYPE_PUBLIC
-                    ? 'Public bin'
-                    : 'Private bin'}
-                </p>
-                <small>
-                  {bin.latitude.toFixed(5)}, {bin.longitude.toFixed(5)}
-                </small>
+        {isFeedbackOpen && (
+          <div className="feedback-modal" role="dialog" aria-modal="true">
+            <form className="feedback-form" onSubmit={handleFeedbackSubmit}>
+              <div className="feedback-form__header">
+                <h3>App Feedback</h3>
                 <button
                   type="button"
-                  className="button button-danger popup-button"
-                  onClick={() => handleDeleteBin(bin.id)}
+                  className="feedback-form__close"
+                  onClick={closeFeedbackForm}
+                  disabled={isSubmittingFeedback}
+                  aria-label="Close feedback form"
                 >
-                  Delete Bin
+                  ×
                 </button>
               </div>
-            </Popup>
-          </Marker>
-        ))}
-      </MapContainer>
+
+              <p className="feedback-form__copy">
+                Share a suggestion, bug, or idea for improving the app.
+              </p>
+
+              <label className="field">
+                <span>Name</span>
+                <input
+                  type="text"
+                  name="name"
+                  value={feedbackForm.name}
+                  onChange={handleFeedbackChange}
+                  placeholder="Your name"
+                />
+              </label>
+
+              <label className="field">
+                <span>Feedback</span>
+                <textarea
+                  name="feedback"
+                  value={feedbackForm.feedback}
+                  onChange={handleFeedbackChange}
+                  rows="4"
+                  placeholder="Tell us what would make the app better"
+                  required
+                />
+              </label>
+
+              {feedbackStatusMessage && (
+                <p className="feedback-form__status">{feedbackStatusMessage}</p>
+              )}
+
+              <div className="form-actions">
+                <button
+                  type="button"
+                  className="button button-secondary"
+                  onClick={closeFeedbackForm}
+                  disabled={isSubmittingFeedback}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="button"
+                  disabled={isSubmittingFeedback}
+                >
+                  {isSubmittingFeedback ? 'Sending...' : 'Send Feedback'}
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
+
+        <MapContainer
+          center={DEFAULT_CENTER}
+          zoom={DEFAULT_ZOOM}
+          scrollWheelZoom
+          className="leaflet-map"
+        >
+          <TileLayer
+            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          />
+
+          <AddBinOnClick onAdd={markNewBin} />
+          <MapCenterTracker onCenterChange={setMapCenter} />
+          <MapController targetLocation={userLocation} />
+
+          {userLocation && (
+            <Marker
+              position={[userLocation.lat, userLocation.lng]}
+              icon={userLocationIcon}
+            >
+              <Popup>
+                <div className="popup-content">
+                  <strong>Your location</strong>
+                  <p>This location comes from your device GPS.</p>
+                  <small>
+                    {userLocation.lat.toFixed(5)}, {userLocation.lng.toFixed(5)}
+                  </small>
+                </div>
+              </Popup>
+            </Marker>
+          )}
+
+          {bins.map((bin) => (
+            <Marker
+              key={bin.id}
+              position={[bin.latitude, bin.longitude]}
+              icon={createTrashBinIcon(bin.bin_type)}
+            >
+              <Popup>
+                <div className="popup-content">
+                  <strong>{bin.title || 'Waste bin'}</strong>
+                  <p>{bin.description || 'No description added.'}</p>
+                  <p className="popup-bin-type">
+                    {getBinType(bin.bin_type) === BIN_TYPE_PUBLIC
+                      ? 'Public bin'
+                      : 'Private bin'}
+                  </p>
+                  <small>
+                    {bin.latitude.toFixed(5)}, {bin.longitude.toFixed(5)}
+                  </small>
+                  <button
+                    type="button"
+                    className="button button-danger popup-button"
+                    onClick={() => handleDeleteBin(bin.id)}
+                  >
+                    Delete Bin
+                  </button>
+                </div>
+              </Popup>
+            </Marker>
+          ))}
+        </MapContainer>
+      </div>
     </div>
   );
 }
