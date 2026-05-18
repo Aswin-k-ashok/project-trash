@@ -4,11 +4,13 @@ create table if not exists public.bins (
   id uuid primary key default gen_random_uuid(),
   latitude double precision not null,
   longitude double precision not null,
+  bin_type text not null default 'public',
   title text,
   description text,
   created_at timestamptz not null default now()
 );
 
+alter table public.bins add column if not exists bin_type text not null default 'public';
 alter table public.bins add column if not exists title text;
 alter table public.bins add column if not exists description text;
 

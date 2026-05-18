@@ -2,7 +2,7 @@
 
 All notable changes to this waste bin locator project are documented in this file.
 
-Last updated: 2026-04-09 23:37:29 +0530
+Last updated: 2026-05-18 00:00:00 +0530
 
 ## [Unreleased]
 
@@ -20,6 +20,7 @@ Last updated: 2026-04-09 23:37:29 +0530
 - Added reverse geocoding with OpenStreetMap Nominatim to display the current area name.
 - Added a `Locate Me` feature using the browser Geolocation API.
 - Added a live user-location marker and map recentering for mobile usage.
+- Added bin type selection when creating a new bin.
 - Added clearer in-app error handling for missing Supabase configuration.
 - Added clearer in-app error handling for missing `public.bins` table errors.
 
@@ -29,6 +30,8 @@ Last updated: 2026-04-09 23:37:29 +0530
 - Changed the add-bin flow from a browser `prompt()` to a proper inline form.
 - Changed the `Locate Me` control from a plain button to a more map-style location button.
 - Changed the Supabase schema to support optional `title` values for bins.
+- Changed the Supabase schema to store a `bin_type` value with a default of `public`.
+- Changed bin markers to use color-coded trash icons for public and private bins.
 - Changed the Supabase schema to support public delete policy for hobby-project simplicity.
 
 ### Fixed
@@ -36,6 +39,7 @@ Last updated: 2026-04-09 23:37:29 +0530
 - Fixed the app to show user-friendly setup messages instead of crashing when env vars are absent.
 - Improved the UX around Supabase API errors by showing more specific guidance for schema issues.
 - Fixed bin saves against older Supabase schemas by falling back to coordinate-only inserts and showing a clearer missing-column message.
+- Fixed legacy save fallback handling so older Supabase tables can still accept new bins before `bin_type` is added.
 
 ### Notes
 - The app is designed around a zero-cost hobby stack:

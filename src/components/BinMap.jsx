@@ -12,17 +12,26 @@ import 'leaflet/dist/leaflet.css';
 import { DEFAULT_CENTER, DEFAULT_ZOOM } from '../config';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
 
-const trashBinIcon = L.divIcon({
-  className: 'trash-bin-marker-wrapper',
-  html: `
-    <div class="trash-bin-marker" aria-hidden="true">
-      <span class="trash-bin-marker__emoji">&#128465;</span>
-    </div>
-  `,
-  iconSize: [34, 34],
-  iconAnchor: [17, 34],
-  popupAnchor: [0, -28],
-});
+const BIN_TYPE_PUBLIC = 'public';
+const BIN_TYPE_PRIVATE = 'private';
+
+function getBinType(binType) {
+  return binType === BIN_TYPE_PRIVATE ? BIN_TYPE_PRIVATE : BIN_TYPE_PUBLIC;
+}
+
+function createTrashBinIcon(binType) {
+  return L.divIcon({
+    className: 'trash-bin-marker-wrapper',
+    html: `
+      <div class="trash-bin-marker trash-bin-marker--${getBinType(binType)}" aria-hidden="true">
+        <span class="trash-bin-marker__emoji">&#128465;</span>
+      </div>
+    `,
+    iconSize: [34, 34],
+    iconAnchor: [17, 34],
+    popupAnchor: [0, -28],
+  });
+}
 
 const userLocationIcon = L.divIcon({
   className: 'user-location-marker-wrapper',
@@ -101,11 +110,21 @@ function getMissingBinColumn(error) {
   return missingColumnMatch ? missingColumnMatch[1] : null;
 }
 
-function buildBinPayload(draftBin, includeOptionalFields = true) {
+function buildBinPayload(
+  draftBin,
+  {
+    includeBinType = true,
+    includeOptionalFields = true,
+  } = {}
+) {
   const payload = {
     latitude: draftBin.latitude,
     longitude: draftBin.longitude,
   };
+
+  if (includeBinType) {
+    payload.bin_type = getBinType(draftBin.binType);
+  }
 
   if (includeOptionalFields) {
     payload.title = draftBin.title.trim() || null;
@@ -233,6 +252,7 @@ function BinMap() {
     setDraftBin({
       latitude: latlng.lat,
       longitude: latlng.lng,
+      binType: BIN_TYPE_PUBLIC,
       title: '',
       description: '',
     });
@@ -270,10 +290,19 @@ function BinMap() {
     if (error) {
       const missingColumn = getMissingBinColumn(error);
 
-      if (missingColumn === 'title' || missingColumn === 'description') {
+      if (
+        missingColumn === 'title' ||
+        missingColumn === 'description' ||
+        missingColumn === 'bin_type'
+      ) {
         const legacyInsert = await supabase
           .from('bins')
-          .insert(buildBinPayload(draftBin, false))
+          .insert(
+            buildBinPayload(draftBin, {
+              includeBinType: missingColumn !== 'bin_type',
+              includeOptionalFields: false,
+            })
+          )
           .select()
           .single();
 
@@ -281,7 +310,7 @@ function BinMap() {
           setBins((currentBins) => [legacyInsert.data, ...currentBins]);
           setDraftBin(null);
           setErrorMessage(
-            `The bin was saved, but your Supabase table is still missing the '${missingColumn}' column. Run supabase/schema.sql so titles and descriptions can be stored too.`
+            `The bin was saved, but your Supabase table is still missing the '${missingColumn}' column. Run supabase/schema.sql so bin types, titles, and descriptions can be stored too.`
           );
           setIsSaving(false);
           return;
@@ -423,6 +452,18 @@ function BinMap() {
           </div>
 
           <label className="field">
+            <span>Bin Type</span>
+            <select
+              name="binType"
+              value={draftBin.binType}
+              onChange={handleDraftChange}
+            >
+              <option value={BIN_TYPE_PUBLIC}>Public</option>
+              <option value={BIN_TYPE_PRIVATE}>Private</option>
+            </select>
+          </label>
+
+          <label className="field">
             <span>Title</span>
             <input
               type="text"
@@ -495,12 +536,17 @@ function BinMap() {
           <Marker
             key={bin.id}
             position={[bin.latitude, bin.longitude]}
-            icon={trashBinIcon}
+            icon={createTrashBinIcon(bin.bin_type)}
           >
             <Popup>
               <div className="popup-content">
                 <strong>{bin.title || 'Waste bin'}</strong>
                 <p>{bin.description || 'No description added.'}</p>
+                <p className="popup-bin-type">
+                  {getBinType(bin.bin_type) === BIN_TYPE_PUBLIC
+                    ? 'Public bin'
+                    : 'Private bin'}
+                </p>
                 <small>
                   {bin.latitude.toFixed(5)}, {bin.longitude.toFixed(5)}
                 </small>
