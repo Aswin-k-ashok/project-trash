@@ -1,0 +1,75 @@
+# Keeps the free Supabase project from being paused.
+#
+# Supabase pauses free-plan projects after 7 days without activity. This job
+# runs one tiny read query against the `bins` table every day, which counts as
+# activity. It uses the anon key, the same public key the website ships with.
+#
+# Setup: add two repository secrets
+# (GitHub repo > Settings > Secrets and variables > Actions > New repository secret):
+#   SUPABASE_URL       the VITE_SUPABASE_URL value from .env
+#   SUPABASE_ANON_KEY  the VITE_SUPABASE_ANON_KEY value from .env
+#
+# Scheduled runs and the manual "Run workflow" button only work once this file
+# is on the default branch (main). Pushing a change to this file on any branch
+# runs it once, so it can be tested before merging.
+#
+# A ping cannot wake a project that is already paused. If the job fails with a
+# DNS or connection error, restore the project from the Supabase dashboard.
+
+name: Keep Supabase awake
+
+on:
+  schedule:
+    # Every day at 04:23 UTC. Daily leaves a wide margin inside the 7-day
+    # window even if GitHub delays or drops a scheduled run.
+    - cron: '23 4 * * *'
+  workflow_dispatch:
+  push:
+    branches: ['**']
+    paths:
+      - .github/workflows/keep-supabase-awake.yml
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Query the bins table
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+        run: |
+          if [ -z "$SUPABASE_URL" ] || [ -z "$SUPABASE_ANON_KEY" ]; then
+            echo "::error::Missing SUPABASE_URL or SUPABASE_ANON_KEY repository secret."
+            exit 1
+          fi
+
+          status=$(curl --silent --show-error \
+            --retry 3 --retry-delay 15 --retry-all-errors \
+            --output response.json --write-out '%{http_code}' \
+            --header "apikey: $SUPABASE_ANON_KEY" \
+            "${SUPABASE_URL%/}/rest/v1/bins?select=id&limit=1")
+
+          echo "Supabase responded with HTTP $status"
+
+          if [ "$status" != "200" ]; then
+            cat response.json
+            echo
+            echo "::error::Ping failed. If the project is paused, restore it from the Supabase dashboard."
+            exit 1
+          fi
+
+      # In public repositories GitHub switches off scheduled workflows after
+      # 60 days without commits. Re-enabling the workflow through the API on
+      # every scheduled run keeps it switched on. GitHub also emails a warning
+      # before it disables a workflow; if that ever happens, re-enable it from
+      # the Actions tab.
+      - name: Keep this schedule enabled
+        if: github.event_name != 'push' || github.ref_name == github.event.repository.default_branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api --method PUT "repos/${{ github.repository }}/actions/workflows/keep-supabase-awake.yml/enable"

@@ -75,8 +75,20 @@ Open the local URL shown by Vite.
    - `VITE_SUPABASE_ANON_KEY`
 4. Deploy.
 
+## 6. Keep the database awake
+
+Supabase pauses free projects after 7 days without activity. The GitHub Actions workflow in [.github/workflows/keep-supabase-awake.yml](./.github/workflows/keep-supabase-awake.yml) sends one small read request every day to prevent that.
+
+1. In the GitHub repo, open Settings > Secrets and variables > Actions and add two repository secrets:
+   - `SUPABASE_URL`: same value as `VITE_SUPABASE_URL`
+   - `SUPABASE_ANON_KEY`: same value as `VITE_SUPABASE_ANON_KEY`
+2. Merge the workflow into `main`. Scheduled runs only happen from the default branch.
+3. Open the Actions tab, pick "Keep Supabase awake", and click "Run workflow" to check that it passes.
+
+The ping cannot wake a project that is already paused. If the job fails with a DNS or connection error, restore the project from the Supabase dashboard first.
+
 ## Notes
 
 - The map uses OpenStreetMap tiles, so there is no Google Maps cost.
-- Supabase free tier is enough for a hobby project.
+- Supabase free tier is enough for a hobby project, as long as the keep-awake workflow is running.
 - For production, make sure your Supabase Row Level Security policies match how open you want the project to be.
