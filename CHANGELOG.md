@@ -2,7 +2,7 @@
 
 All notable changes to this waste bin locator project are documented in this file.
 
-Last updated: 2026-05-18 00:00:00 +0530
+Last updated: 2026-11-19 00:00:00 +0530
 
 ## [Unreleased]
 
@@ -23,6 +23,8 @@ Last updated: 2026-05-18 00:00:00 +0530
 - Added bin type selection when creating a new bin.
 - Added clearer in-app error handling for missing Supabase configuration.
 - Added clearer in-app error handling for missing `public.bins` table errors.
+- Added a daily GitHub Actions workflow that pings Supabase so the free project is not paused for inactivity.
+- Added `CLOUDFLARE_MIGRATION_PLAN.md` describing the planned move to Cloudflare Workers + D1.
 
 ### Changed
 - Changed the default map center from Delhi to Kochi, Kerala, India.
