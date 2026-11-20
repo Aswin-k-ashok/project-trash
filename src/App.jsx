@@ -1,9 +1,47 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import BinMap from './components/BinMap';
+
+function isRunningInstalled() {
+  return (
+    window.matchMedia?.('(display-mode: standalone)')?.matches ||
+    window.navigator.standalone === true
+  );
+}
+
+// Browsers without an install prompt that can still install the app by hand.
+// Returns the button label and instructions, or null when there's no way.
+function getManualInstallHelp() {
+  const userAgent = window.navigator.userAgent || '';
+  // iPadOS reports itself as a Mac, but has a touch screen.
+  const isIos =
+    /iPad|iPhone|iPod/.test(userAgent) ||
+    (/Macintosh/.test(userAgent) && window.navigator.maxTouchPoints > 1);
+  const isSafari =
+    /Safari/.test(userAgent) &&
+    !/Chrome|Chromium|CriOS|FxiOS|EdgiOS|Edg\/|OPiOS|OPR\/|Firefox/.test(userAgent);
+
+  if (isIos && isSafari) {
+    return {
+      label: 'Add to Home Screen',
+      steps: 'Tap the Share button in Safari, then choose “Add to Home Screen”.',
+    };
+  }
+
+  if (/Macintosh/.test(userAgent) && isSafari) {
+    return {
+      label: 'Add to Dock',
+      steps: 'In the Safari menu bar, choose File › Add to Dock.',
+    };
+  }
+
+  return null;
+}
 
 function App() {
   const [deferredInstallPrompt, setDeferredInstallPrompt] = useState(null);
-  const [installMessage, setInstallMessage] = useState('');
+  const [isInstalled, setIsInstalled] = useState(isRunningInstalled);
+  const [isInstallHelpOpen, setIsInstallHelpOpen] = useState(false);
+  const [manualInstallHelp] = useState(getManualInstallHelp);
 
   useEffect(() => {
     function handleBeforeInstallPrompt(event) {
@@ -13,7 +51,7 @@ function App() {
 
     function handleAppInstalled() {
       setDeferredInstallPrompt(null);
-      setInstallMessage('Installed');
+      setIsInstalled(true);
     }
 
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
@@ -28,39 +66,25 @@ function App() {
     };
   }, []);
 
-  const isIosInstallHint = useMemo(() => {
-    const isStandalone =
-      window.matchMedia?.('(display-mode: standalone)').matches ||
-      window.navigator.standalone === true;
-    const userAgent = window.navigator.userAgent || '';
-    const isIosDevice = /iPad|iPhone|iPod/.test(userAgent);
-    const isSafari = /Safari/.test(userAgent) && !/CriOS|FxiOS/.test(userAgent);
-
-    return isIosDevice && isSafari && !isStandalone;
-  }, []);
-
+  // Only offer the button when pressing it can do something: show the
+  // browser's install prompt, or explain the manual steps.
+  const canOfferInstall =
+    !isInstalled && (Boolean(deferredInstallPrompt) || Boolean(manualInstallHelp));
   const installLabel = deferredInstallPrompt
     ? 'Install App'
-    : isIosInstallHint
-      ? 'Add to Home Screen'
-      : installMessage || 'Install App';
+    : manualInstallHelp?.label;
 
   async function handleInstallClick() {
     if (deferredInstallPrompt) {
       deferredInstallPrompt.prompt();
-      const { outcome } = await deferredInstallPrompt.userChoice;
-
-      if (outcome !== 'accepted') {
-        setInstallMessage('Install Later');
-      }
-
+      await deferredInstallPrompt.userChoice;
+      // A prompt can only be used once. If it was dismissed, the browser may
+      // offer a new one later, and the button comes back then.
       setDeferredInstallPrompt(null);
       return;
     }
 
-    if (isIosInstallHint) {
-      setInstallMessage('Use Safari Share > Add to Home Screen');
-    }
+    setIsInstallHelpOpen((isOpen) => !isOpen);
   }
 
   return (
@@ -69,16 +93,35 @@ function App() {
       <div className="app-glow app-glow--two" aria-hidden="true"></div>
 
       <section className="hero-panel">
-        <button
-          type="button"
-          className="hero-install-button"
-          onClick={handleInstallClick}
-          aria-label={installLabel}
-          title={installLabel}
-        >
-          <span className="hero-install-button__icon" aria-hidden="true"></span>
-          <span className="hero-install-button__label">{installLabel}</span>
-        </button>
+        {canOfferInstall && (
+          <div className="hero-install">
+            <button
+              type="button"
+              className="hero-install-button"
+              onClick={handleInstallClick}
+              aria-label={installLabel}
+              aria-expanded={deferredInstallPrompt ? undefined : isInstallHelpOpen}
+              title={installLabel}
+            >
+              <span className="hero-install-button__icon" aria-hidden="true"></span>
+              <span className="hero-install-button__label">{installLabel}</span>
+            </button>
+
+            {isInstallHelpOpen && !deferredInstallPrompt && (
+              <div className="install-help" role="status">
+                <p>{manualInstallHelp.steps}</p>
+                <button
+                  type="button"
+                  className="install-help__close"
+                  onClick={() => setIsInstallHelpOpen(false)}
+                  aria-label="Close install instructions"
+                >
+                  ×
+                </button>
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="hero-copy-block">
           <div className="hero-topline">
@@ -107,7 +150,7 @@ function App() {
         </div> */}
       </section>
 
-      <section className="map-scroll-stage">
+      <section className="map-section">
         <div className="map-card map-card--overlay">
           <div className="map-card__header">
             <div>

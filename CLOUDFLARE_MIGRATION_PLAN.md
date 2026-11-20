@@ -14,14 +14,14 @@ Move **Bin There** from **Supabase (database) + Vercel (hosting)** to **Cloudfla
 |---|---|
 | Supabase pauses free projects after 7 days with no activity. On 2026-11-19 the project hostname already returned "no such domain", meaning it was paused. | D1 on the Workers Free plan does not pause. |
 | Running depends on a keep-awake workaround. | Nothing to keep awake. |
-| Any visitor can delete any bin, through the `delete_bin()` function: one bin per call, at most 30 an hour, each copied to `deleted_bins` first. | All writes go through our own API, so delete rules can be tightened (Phase 8). |
+| Any visitor can delete or edit any bin, through the `delete_bin()` and `update_bin()` functions: one bin per call, at most 30 deletes and 60 edits an hour, with the old version copied to `deleted_bins` / `bin_edits` first. | All writes go through our own API, so delete and edit rules can be tightened (Phase 8). |
 | Hosting and database are with two providers, set up with two sets of env vars. | One provider and one config file, with no secrets in the frontend. |
 
 Vercel itself works fine. It moves only because Cloudflare can serve the site and the API from the same Worker.
 
 ---
 
-## 2. Current state (verified in code on 2026-11-19)
+## 2. Current state (verified in code on 2026-11-20)
 
 **Frontend:** React 18 + Vite 5.4 single-page app, Leaflet/OpenStreetMap, Nominatim reverse geocoding, and a PWA (`public/manifest.webmanifest`, `public/sw.js`). It has no router and is served from `/`.
 
@@ -29,9 +29,10 @@ Vercel itself works fine. It moves only because Cloudflare can serve the site an
 
 | Table | Columns | Anon access (RLS) |
 |---|---|---|
-| `bins` | `id uuid`, `latitude double`, `longitude double`, `bin_type text default 'public'`, `title text`, `description text`, `created_at timestamptz` | select, insert; delete only through `delete_bin(bin_id)` |
+| `bins` | `id uuid`, `latitude double`, `longitude double`, `bin_type text default 'public'`, `title text`, `description text`, `created_at timestamptz` | select, insert; delete only through `delete_bin(bin_id)`, update only through `update_bin(...)` |
 | `app_feedback` | `id uuid`, `name text`, `feedback text`, `created_at timestamptz` | insert only |
 | `deleted_bins` | the `bins` columns plus `deletion_id`, `deleted_at`; an archive of deleted bins | none |
+| `bin_edits` | the `bins` columns plus `edit_id`, `edited_at`; the version of a bin from before each edit | none |
 
 Check constraints limit `bin_type` to `public`/`private`, coordinates to valid ranges, and text to the same lengths as the Phase 4 validation rules.
 
@@ -39,12 +40,13 @@ Check constraints limit `bin_type` to `public`/`private`, coordinates to valid r
 
 | What | Where (`BinMap.jsx`) | Supabase call |
 |---|---|---|
-| Load all bins | `loadBins` | `from('bins').select('*').order('created_at', { ascending: false })` |
+| Load all bins | `loadBins` → `fetchAllBins` | `from('bins').select('*', { count: 'exact' }).order(...).range(...)` in 1,000-row pages, because Supabase caps each response at 1,000 rows |
 | Add a bin | `handleSaveDraftBin` | `insert(payload).select().single()`, plus a "legacy insert" fallback for old schemas |
+| Edit a bin | `saveBinChanges` | `rpc('update_bin', { bin_id, new_latitude, new_longitude, new_bin_type, new_title, new_description })`, which returns the updated row, or no row if the bin was already gone |
 | Delete a bin | `handleDeleteBin` | `rpc('delete_bin', { bin_id })`, which returns `false` if the bin was already gone |
 | Send feedback | `handleFeedbackSubmit` | `from('app_feedback').insert({ name, feedback })` |
 
-The app does not use Supabase auth, storage or realtime. Its one RPC is `delete_bin`.
+The app does not use Supabase auth, storage or realtime. Its two RPCs are `delete_bin` and `update_bin`.
 
 **Service worker problems found during review** (they affect the cutover, so Phase 0 fixes them first):
 
@@ -286,6 +288,7 @@ Each phase ends in a working app, so you can stop between any two.
 |---|---|---|---|---|
 | GET | `/api/bins` | none | `200` array of bins, newest first | `500` |
 | POST | `/api/bins` | `{ latitude, longitude, bin_type?, title?, description? }` | `201` the created bin | `400` validation, `413` too large |
+| PATCH | `/api/bins/:id` | `{ latitude, longitude, bin_type, title?, description? }` | `200` the updated bin | `400`, `404` already gone, `413` |
 | DELETE | `/api/bins/:id` | none | `204` | `404` already gone |
 | POST | `/api/feedback` | `{ name?, feedback }` | `201 { ok: true }` | `400`, `413` |
 | GET | `/api/health` | none | `200 { ok: true }` | none |
@@ -294,7 +297,7 @@ Every error has the shape `{ "error": { "message": "..." } }`, and every respons
 
 **Validation rules:** latitude must be a number from -90 to 90 and longitude from -180 to 180; `bin_type` must be `public` or `private` (default `public`); text is trimmed and an empty string becomes `null`; title is at most 80 characters, description 500, name 80, and feedback 1 to 2,000; the request body is at most 10 KB.
 
-**Delete parity.** On Supabase, `delete_bin()` allows at most 30 deletes an hour and copies each deleted bin to `deleted_bins`. The `deleteBin` below does neither. To keep those protections, add a `deleted_bins` table in Phase 3 and do the same count and copy here. Otherwise accept losing them until Phase 8.
+**Delete and edit parity.** On Supabase, `delete_bin()` allows at most 30 deletes an hour and copies each deleted bin to `deleted_bins`, and `update_bin()` allows 60 edits an hour and copies the old version to `bin_edits`. The `deleteBin` below does neither, and the starting point has no `PATCH` handler yet. Add one that validates like `createBin` and runs `UPDATE bins SET ... WHERE id = ?` (`404` when `meta.changes === 0`). To keep the protections, add `deleted_bins` and `bin_edits` tables in Phase 3 and do the same count and copy here; otherwise accept losing them until Phase 8.
 
 **`worker/index.js` starting point:**
 
@@ -468,12 +471,13 @@ export default {
    export const sendFeedback = (entry) => request('/api/feedback', { method: 'POST', body: entry });
    ```
 2. Edit `src/components/BinMap.jsx`:
-   - **Imports:** import `{ listBins, createBin, deleteBin, sendFeedback }` from `../lib/api` instead of Supabase.
-   - **Error helpers:** delete `getSupabaseErrorMessage`, `getMissingBinColumn`, `getDeleteErrorMessage` and `getFeedbackErrorMessage`. Use `error.message` (already user-friendly) with the existing fallback text.
+   - **Imports:** import `{ listBins, createBin, updateBin, deleteBin, sendFeedback }` from `../lib/api` instead of Supabase.
+   - **Error helpers:** delete `getMissingFunctionMessage`, `getSupabaseErrorMessage`, `getMissingBinColumn`, `getDeleteErrorMessage`, `getEditErrorMessage` and `getFeedbackErrorMessage`. Use `error.message` (already user-friendly) with the existing fallback text.
    - **`buildBinPayload`:** simplify it (the `includeBinType` / `includeOptionalFields` options only existed for the legacy fallback).
    - **Remove the `isSupabaseConfigured` guards** in `loadBins`, `markNewBin`, `handleDeleteBin` and `handleFeedbackSubmit`. With a same-origin API there's no config to miss.
-   - **`loadBins`:** `const { data, error } = await listBins();`
+   - **`loadBins`:** `const { data, error } = await listBins();` and delete `fetchAllBins`; the Worker returns every row in one response.
    - **`handleSaveDraftBin`:** `const { data, error } = await createBin(buildBinPayload(draftBin));` and drop the legacy-insert block.
+   - **`saveBinChanges`:** `const { data, error } = await updateBin(draft.id, { latitude, longitude, bin_type, title, description });` (add `updateBin` to `src/lib/api.js` as a `PATCH`). Treat `error.status === 404` the way an empty result is handled now.
    - **`handleDeleteBin`:** replace the `supabase.rpc('delete_bin', ...)` call with `const { error } = await deleteBin(binId);`. Treat `error.status === 404` the way `wasDeleted === false` is handled now: remove the bin from the list and show "This bin had already been removed."
    - **`handleFeedbackSubmit`:** `await sendFeedback({ name: ..., feedback: ... })`.
    - **Rendering (the `bins.map(...)` markers and popups) stays the same**, because the field names (`id`, `latitude`, `longitude`, `bin_type`, `title`, `description`) are unchanged.

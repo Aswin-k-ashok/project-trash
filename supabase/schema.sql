@@ -42,6 +42,31 @@ create table if not exists public.deleted_bins (
   deleted_at timestamptz not null default now()
 );
 
+-- The version of a bin from before each edit made through the app. Same
+-- access rules as deleted_bins. To undo the latest edit of one bin:
+--
+--   update public.bins b
+--   set latitude = e.latitude, longitude = e.longitude, bin_type = e.bin_type,
+--       title = e.title, description = e.description
+--   from (
+--     select * from public.bin_edits
+--     where id = '<bin id>'
+--     order by edited_at desc
+--     limit 1
+--   ) e
+--   where b.id = e.id;
+create table if not exists public.bin_edits (
+  edit_id uuid primary key default gen_random_uuid(),
+  id uuid not null,
+  latitude double precision not null,
+  longitude double precision not null,
+  bin_type text not null,
+  title text,
+  description text,
+  created_at timestamptz not null,
+  edited_at timestamptz not null default now()
+);
+
 alter table public.bins add column if not exists bin_type text not null default 'public';
 alter table public.bins add column if not exists title text;
 alter table public.bins add column if not exists description text;
@@ -80,6 +105,7 @@ alter table public.app_feedback add constraint app_feedback_feedback_length_chec
 alter table public.bins enable row level security;
 alter table public.app_feedback enable row level security;
 alter table public.deleted_bins enable row level security;
+alter table public.bin_edits enable row level security;
 
 drop policy if exists "Public can read bins" on public.bins;
 drop policy if exists "Public can insert bins" on public.bins;
@@ -104,11 +130,12 @@ for insert
 to anon
 with check (true);
 
--- No direct deletes from the public API. With them, one request such as
--- DELETE /rest/v1/bins?id=not.is.null could empty the whole table.
--- The app deletes through delete_bin() below instead.
-revoke delete on public.bins from anon, authenticated;
+-- No direct deletes or updates from the public API. With them, one request
+-- such as DELETE /rest/v1/bins?id=not.is.null could empty or overwrite the
+-- whole table. The app uses delete_bin() and update_bin() below instead.
+revoke delete, update on public.bins from anon, authenticated;
 revoke all on public.deleted_bins from anon, authenticated;
+revoke all on public.bin_edits from anon, authenticated;
 
 -- Anyone can still delete a bin (decision D2 in CLOUDFLARE_MIGRATION_PLAN.md),
 -- but only one per call, at most 30 per hour across all visitors, and each one
@@ -145,9 +172,60 @@ $$;
 revoke all on function public.delete_bin(uuid) from public;
 grant execute on function public.delete_bin(uuid) to anon, authenticated;
 
+-- Edits follow the same rules as deletes: anyone can edit a bin, one per
+-- call, at most 60 per hour across all visitors, and the old version is
+-- copied to bin_edits first. The table's checks still apply to the new values.
+-- Returns the updated bin, or no row when the bin no longer exists.
+create or replace function public.update_bin(
+  bin_id uuid,
+  new_latitude double precision,
+  new_longitude double precision,
+  new_bin_type text,
+  new_title text,
+  new_description text
+)
+returns setof public.bins
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  if (
+    select count(*)
+    from public.bin_edits
+    where edited_at > now() - interval '1 hour'
+  ) >= 60 then
+    raise exception 'Too many bins were edited in the last hour. Please try again later.';
+  end if;
+
+  insert into public.bin_edits (id, latitude, longitude, bin_type, title, description, created_at)
+  select id, latitude, longitude, bin_type, title, description, created_at
+  from public.bins
+  where id = bin_id;
+
+  return query
+  with changed as (
+    update public.bins
+    set
+      latitude = new_latitude,
+      longitude = new_longitude,
+      bin_type = new_bin_type,
+      title = nullif(btrim(new_title), ''),
+      description = nullif(btrim(new_description), '')
+    where id = bin_id
+    returning *
+  )
+  select * from changed;
+end;
+$$;
+
+revoke all on function public.update_bin(uuid, double precision, double precision, text, text, text) from public;
+grant execute on function public.update_bin(uuid, double precision, double precision, text, text, text) to anon, authenticated;
+
 create index if not exists bins_created_at_idx on public.bins (created_at desc);
 create index if not exists app_feedback_created_at_idx on public.app_feedback (created_at desc);
 create index if not exists deleted_bins_deleted_at_idx on public.deleted_bins (deleted_at desc);
+create index if not exists bin_edits_edited_at_idx on public.bin_edits (edited_at desc);
 
 -- Make the API pick up the new function right away.
 notify pgrst, 'reload schema';
