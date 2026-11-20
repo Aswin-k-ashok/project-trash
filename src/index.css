@@ -17,7 +17,8 @@
   --line-strong: rgba(65, 45, 90, 0.14);
   --text-strong: #19161f;
   --text: #4f475d;
-  --text-muted: #8a8198;
+  /* At least 4.5:1 against white and the darkest page background (WCAG AA). */
+  --text-muted: #6b6379;
   --primary: #6f35f5;
   --primary-strong: #5926db;
   --primary-soft: #efe7ff;
@@ -25,7 +26,7 @@
   --danger-soft: #fff0f2;
   --danger-text: #c03f55;
   --success-soft: #edf9f2;
-  --success-text: #278458;
+  --success-text: #1f7a4f;
   --shadow-card: 0 18px 50px rgba(38, 25, 62, 0.08);
   --shadow-float: 0 10px 24px rgba(38, 25, 62, 0.14);
   --shadow-modal: 0 28px 70px rgba(25, 16, 40, 0.2);
@@ -54,18 +55,11 @@ select {
   font: inherit;
 }
 
-button,
-input,
-textarea,
-select {
-  outline: none;
-}
-
-button:focus-visible,
-input:focus-visible,
-textarea:focus-visible,
-select:focus-visible {
-  box-shadow: 0 0 0 4px rgba(111, 53, 245, 0.16);
+/* A clear ring for keyboard focus on anything focusable, including map markers
+   and the map itself. It uses an outline, so buttons keep their shadows. */
+:focus-visible {
+  outline: 3px solid var(--primary);
+  outline-offset: 2px;
 }
 
 #root {
@@ -169,11 +163,52 @@ select:focus-visible {
   text-transform: uppercase;
 }
 
-.hero-install-button {
+.hero-install {
   position: absolute;
   top: 32px;
   right: 24px;
-  z-index: 2;
+  z-index: 3;
+  display: grid;
+  justify-items: end;
+}
+
+/* Manual install steps for Safari, which has no install prompt. */
+.install-help {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: min(280px, calc(100vw - 48px));
+  padding: 12px 12px 12px 14px;
+  border-radius: 18px;
+  background: var(--surface-strong);
+  box-shadow: var(--shadow-float);
+  color: var(--text);
+  font-size: 0.92rem;
+}
+
+.install-help p {
+  flex: 1;
+  margin: 0;
+}
+
+.install-help__close {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  margin: -4px -4px 0 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--surface-muted);
+  color: var(--text);
+  font-size: 1.1rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.hero-install-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -288,18 +323,14 @@ select:focus-visible {
   z-index: 8;
 }
 
-.map-scroll-stage {
+/* A plain section. It used to be 150vh tall with a sticky map card, which
+   left empty scrolling under a map that also caught the mouse wheel. */
+.map-section {
   position: relative;
-  min-height: 150vh;
-  margin-top: 0;
   z-index: 8;
 }
 
 .map-card--overlay {
-  position: sticky;
-  top: 5vh;
-  min-height: 90vh;
-  margin-top: 0;
   box-shadow: 0 28px 80px rgba(25, 16, 40, 0.18);
   backdrop-filter: blur(20px);
 }
@@ -344,16 +375,51 @@ select:focus-visible {
   overflow: hidden;
 }
 
-.map-fullscreen-portal {
-  position: fixed;
-  inset: 0;
-  z-index: 1200;
+/* backdrop-filter makes the card the containing block for fixed-position
+   children, which would trap the full-screen map inside the card. */
+body.map-fullscreen-open .map-card {
+  backdrop-filter: none;
 }
 
-.map-wrapper--fullscreen .toolbar,
-.map-wrapper--fullscreen .error-banner,
-.map-wrapper--fullscreen .bin-form {
+.map-wrapper--fullscreen .toolbar {
   display: none;
+}
+
+/* Messages, the nearest-bin card and status chips float over the top of the
+   map in both views, so they never push the map down the page. */
+.map-notices {
+  position: absolute;
+  top: max(12px, env(safe-area-inset-top));
+  /* Leaves room for the zoom control (left) and the map key (right). */
+  left: 56px;
+  right: 56px;
+  z-index: 1100;
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+  max-width: 460px;
+  margin: 0 auto;
+  pointer-events: none;
+}
+
+/* The add/edit form is a bottom sheet over the map in both views. */
+.bin-form {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: max(12px, env(safe-area-inset-bottom));
+  z-index: 1100;
+  max-width: 430px;
+  max-height: calc(100% - 96px);
+  margin: 0 auto;
+  overflow-y: auto;
+  /* Opaque, so the map controls underneath don't show through. */
+  background: var(--surface-strong);
+  box-shadow: var(--shadow-modal);
+}
+
+.bin-form .field textarea {
+  min-height: 72px;
 }
 
 .map-wrapper--fullscreen .map-stage {
@@ -365,11 +431,6 @@ select:focus-visible {
 }
 
 .toolbar {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  align-items: flex-start;
-  flex-wrap: wrap;
   padding: 2px 2px 0;
 }
 
@@ -388,10 +449,9 @@ select:focus-visible {
 .status-group {
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: center;
   flex-wrap: wrap;
   gap: 8px;
-  min-height: 32px;
 }
 
 .status {
@@ -403,15 +463,100 @@ select:focus-visible {
   color: var(--primary-strong);
   font-size: 0.88rem;
   font-weight: 600;
+  box-shadow: var(--shadow-float);
 }
 
-.error-banner {
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
   margin: 0;
   padding: 12px 14px;
   border-radius: 18px;
-  border: 1px solid rgba(207, 77, 93, 0.12);
+  border: 1px solid var(--line-soft);
+  background: var(--surface-strong);
+  color: var(--text);
+  box-shadow: var(--shadow-float);
+  pointer-events: auto;
+}
+
+.notice p {
+  flex: 1;
+  margin: 0;
+}
+
+.notice--error {
+  border-color: rgba(207, 77, 93, 0.12);
   background: var(--danger-soft);
   color: var(--danger-text);
+}
+
+.notice--success {
+  border-color: rgba(31, 122, 79, 0.14);
+  background: var(--success-soft);
+  color: var(--success-text);
+}
+
+.notice__body {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+}
+
+.notice__eyebrow {
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.notice__body strong {
+  color: var(--text-strong);
+}
+
+.notice__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.notice__action {
+  display: inline-flex;
+  align-items: center;
+  border: 0;
+  border-radius: 999px;
+  padding: 7px 12px;
+  background: var(--primary-soft);
+  color: var(--primary-strong);
+  font-size: 0.88rem;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.notice__action:hover {
+  background: #e4d8ff;
+}
+
+.notice__close {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  margin: -3px -6px -3px 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.notice__close:hover {
+  background: rgba(65, 45, 90, 0.08);
 }
 
 .bin-form,
@@ -464,7 +609,7 @@ select:focus-visible {
 
 .field input::placeholder,
 .field textarea::placeholder {
-  color: #aaa1b6;
+  color: var(--text-muted);
 }
 
 .field input:focus,
@@ -489,8 +634,12 @@ select:focus-visible {
 }
 
 .button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   border: 0;
   border-radius: 999px;
+  text-decoration: none;
   padding: 11px 18px;
   background: linear-gradient(135deg, var(--primary) 0%, var(--primary-strong) 100%);
   color: #ffffff;
@@ -517,9 +666,10 @@ select:focus-visible {
   box-shadow: none;
 }
 
+/* Dark enough for white text at 4.5:1 or better across the gradient. */
 .button-danger {
-  background: linear-gradient(135deg, #ea6576 0%, #cf4d5d 100%);
-  box-shadow: 0 12px 24px rgba(207, 77, 93, 0.2);
+  background: linear-gradient(135deg, #c8455a 0%, #b73a4c 100%);
+  box-shadow: 0 12px 24px rgba(183, 58, 76, 0.2);
 }
 
 .map-stage {
@@ -551,6 +701,11 @@ select:focus-visible {
   bottom: 148px;
 }
 
+.map-wrapper--fullscreen .place-pin-button {
+  right: 18px;
+  bottom: 204px;
+}
+
 .feedback-trigger,
 .map-control-button {
   position: absolute;
@@ -577,20 +732,19 @@ select:focus-visible {
   background: #ffffff;
 }
 
+/* Above Leaflet's own controls (z-index 1000) and the floating messages. */
 .feedback-modal {
   position: absolute;
   inset: 0;
-  z-index: 560;
+  z-index: 1150;
   display: grid;
   place-items: end center;
   padding: 18px;
   background: linear-gradient(180deg, rgba(30, 22, 40, 0.02), rgba(30, 22, 40, 0.26));
-  pointer-events: none;
 }
 
 .feedback-form {
   width: min(430px, 100%);
-  pointer-events: auto;
   box-shadow: var(--shadow-modal);
 }
 
@@ -617,8 +771,16 @@ select:focus-visible {
   margin: 0;
   padding: 11px 13px;
   border-radius: 16px;
+}
+
+.feedback-form__status--success {
   background: var(--success-soft);
   color: var(--success-text);
+}
+
+.feedback-form__status--error {
+  background: var(--danger-soft);
+  color: var(--danger-text);
 }
 
 .map-control-button {
@@ -648,6 +810,94 @@ select:focus-visible {
 
 .maximize-button {
   bottom: 144px;
+}
+
+.place-pin-button {
+  bottom: 200px;
+}
+
+/* A plus sign: drops a new bin's pin in the middle of the map. */
+.place-pin-button__icon {
+  position: relative;
+  width: 18px;
+  height: 18px;
+}
+
+.place-pin-button__icon::before,
+.place-pin-button__icon::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  border-radius: 999px;
+  background: var(--primary);
+  transform: translate(-50%, -50%);
+}
+
+.place-pin-button__icon::before {
+  width: 18px;
+  height: 3px;
+}
+
+.place-pin-button__icon::after {
+  width: 3px;
+  height: 18px;
+}
+
+.map-legend {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 500;
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: var(--shadow-float);
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 600;
+  list-style: none;
+  pointer-events: none;
+}
+
+.map-legend li {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.map-legend__dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}
+
+.map-legend__dot--public {
+  background: #1d8554;
+}
+
+/* The darker ring keeps the yellow visible against white (3:1). */
+.map-legend__dot--private {
+  background: #f0c14f;
+  box-shadow: inset 0 0 0 2px #a77a0c;
+}
+
+.map-scroll-hint {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 1050;
+  padding: 10px 16px;
+  border-radius: 999px;
+  background: rgba(25, 22, 31, 0.82);
+  color: #ffffff;
+  font-weight: 600;
+  white-space: nowrap;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
 }
 
 .maximize-button__icon {
@@ -733,9 +983,20 @@ select:focus-visible {
   background: linear-gradient(180deg, #f0c14f 0%, #d39d18 100%);
 }
 
+/* The not-yet-saved bin from the add-bin form. */
+.trash-bin-marker--draft {
+  outline: 2px dashed var(--primary-strong);
+  outline-offset: 3px;
+  cursor: grab;
+}
+
 .trash-bin-marker__emoji {
   font-size: 16px;
   line-height: 1;
+}
+
+.trash-bin-marker-wrapper:focus-visible {
+  border-radius: 18px;
 }
 
 .leaflet-map {
@@ -817,6 +1078,12 @@ select:focus-visible {
   color: var(--text);
 }
 
+.popup-content__distance {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+/* Matches the marker colours: green for public, yellow for private. */
 .popup-bin-type {
   display: inline-flex;
   align-items: center;
@@ -824,10 +1091,18 @@ select:focus-visible {
   min-width: fit-content;
   padding: 6px 10px;
   border-radius: 999px;
-  background: var(--primary-soft);
   font-weight: 600;
-  color: var(--primary-strong);
   font-size: 0.8rem;
+}
+
+.popup-bin-type--public {
+  background: #e3f5ec;
+  color: #1b6e46;
+}
+
+.popup-bin-type--private {
+  background: #fdf1d2;
+  color: #7a5500;
 }
 
 .popup-button {
@@ -835,6 +1110,21 @@ select:focus-visible {
   width: 100%;
   justify-content: center;
   margin-top: 2px;
+}
+
+/* Leaflet colours every link in the map blue; keep button links white. */
+.leaflet-container a.button {
+  color: #ffffff;
+}
+
+.popup-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.popup-actions .button {
+  flex: 1;
+  padding: 9px 12px;
 }
 
 @media (max-width: 900px) {
@@ -852,8 +1142,12 @@ select:focus-visible {
     max-width: 56ch;
   }
 
-  .map-scroll-stage {
-    min-height: 140vh;
+  /* Too narrow for messages to sit between the zoom buttons and the map key,
+     so stack them below both, using the full width. */
+  .map-notices {
+    top: calc(max(12px, env(safe-area-inset-top)) + 68px);
+    left: 12px;
+    right: 12px;
   }
 }
 
@@ -887,10 +1181,14 @@ select:focus-visible {
     flex-wrap: wrap;
   }
 
-  .hero-install-button {
-    position: static;
+  .hero-install {
+    position: relative;
     top: auto;
     right: auto;
+    justify-self: end;
+  }
+
+  .hero-install-button {
     width: 31px;
     height: 31px;
     min-height: 31px;
@@ -914,29 +1212,10 @@ select:focus-visible {
     padding: 16px;
   }
 
-  .map-scroll-stage {
-    min-height: auto;
-    margin-top: 0;
-  }
-
-  .map-card--overlay {
-    position: relative;
-    top: auto;
-    min-height: auto;
-  }
-
   .map-stage {
     min-height: 68vh;
     min-height: 68dvh;
     border-radius: 24px;
-  }
-
-  .toolbar {
-    flex-direction: column;
-  }
-
-  .status-group {
-    justify-content: flex-start;
   }
 
   .leaflet-map {
@@ -954,6 +1233,11 @@ select:focus-visible {
   .maximize-button {
     right: 12px;
     bottom: 142px;
+  }
+
+  .place-pin-button {
+    right: 12px;
+    bottom: 198px;
   }
 
   .map-wrapper--fullscreen {
@@ -991,6 +1275,11 @@ select:focus-visible {
     bottom: calc(max(12px, env(safe-area-inset-bottom)) + 130px);
   }
 
+  .map-wrapper--fullscreen .place-pin-button {
+    right: 12px;
+    bottom: calc(max(12px, env(safe-area-inset-bottom)) + 186px);
+  }
+
   .feedback-modal {
     padding: 12px;
   }
@@ -1001,13 +1290,28 @@ select:focus-visible {
     max-width: 330px;
   }
 
-  .form-actions {
-    flex-direction: column-reverse;
+  /* Side by side keeps the bottom sheets short, leaving more map in view. */
+  .form-actions .button {
+    flex: 1;
   }
 
-  .form-actions .button,
-  .form-actions .button-secondary {
-    width: 100%;
-    justify-content: center;
+  .bin-form {
+    gap: 10px;
+    padding: 14px;
+    border-radius: 22px;
+  }
+
+  .bin-form .field {
+    gap: 4px;
+  }
+
+  .bin-form .field input,
+  .bin-form .field select,
+  .bin-form .field textarea {
+    padding: 10px 12px;
+  }
+
+  .bin-form-header p {
+    font-size: 0.88rem;
   }
 }

@@ -55,7 +55,7 @@ The app is a civic utility, so it should feel trustworthy and easy rather than f
 - `line-soft`: `rgba(65, 45, 90, 0.08)`
 - `text-strong`: `#19161f`
 - `text`: `#4f475d`
-- `text-muted`: `#8a8198`
+- `text-muted`: `#6b6379` (darkened from `#8a8198` to reach 4.5:1 contrast on the page background)
 
 ### Accent Colors
 
@@ -162,7 +162,8 @@ If a layout feels cramped, increase space before adding decoration.
 ### Forms
 
 - Inputs should sit on white surfaces.
-- Use soft borders and clear focus rings.
+- Use soft borders and clear focus rings: a solid 3px `primary` outline on `:focus-visible`.
+- All text, including placeholders and helper text, needs at least 4.5:1 contrast (WCAG AA).
 - Labels should be concise and always visible.
 
 ### Modal / Sheet Patterns
@@ -181,6 +182,7 @@ If a layout feels cramped, increase space before adding decoration.
 
 - Controls should float above the map, not compete with the base map tiles.
 - Bottom-center and bottom-right overlays should feel like native map controls.
+- Placement: zoom top-left, map key top-right, messages and status pills top-center (below both on screens under 900px), map buttons bottom-right, feedback bottom-center, and forms as bottom sheets over the map. Nothing is inserted above the map, so it never jumps down the page.
 - Overlay hierarchy:
   - Primary map content
   - Floating controls

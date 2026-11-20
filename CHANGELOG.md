@@ -2,7 +2,7 @@
 
 All notable changes to this waste bin locator project are documented in this file.
 
-Last updated: 2026-11-19 00:00:00 +0530
+Last updated: 2026-11-20 00:00:00 +0530
 
 ## [Unreleased]
 
@@ -25,6 +25,16 @@ Last updated: 2026-11-19 00:00:00 +0530
 - Added clearer in-app error handling for missing `public.bins` table errors.
 - Added a daily GitHub Actions workflow that pings Supabase so the free project is not paused for inactivity.
 - Added `CLOUDFLARE_MIGRATION_PLAN.md` describing the planned move to Cloudflare Workers + D1.
+- Added a dashed draft pin that shows where a new bin will go. It can be dragged, and tapping the map again moves it without clearing the form.
+- Added a `delete_bin()` database function and a `deleted_bins` archive table, so deleted bins can be restored (see the comment in `supabase/schema.sql`).
+- Added database checks for bin type, coordinates and text length, with matching length limits on the forms.
+- Added a dismiss button to the error banner.
+- Added a "nearest bin" card after Locate Me, with the distance and buttons to show the bin or get walking directions (Google Maps link).
+- Added the distance from you and a Directions button to every bin popup.
+- Added editing: an Edit button in each popup, saved through a new `update_bin()` database function (one bin per call, at most 60 edits an hour, old version kept in a new `bin_edits` table).
+- Added a map key for the green (public) and yellow (private) markers.
+- Added short confirmations after adding, editing or deleting a bin.
+- Added an "add a bin at the map centre" button, so bins can be added with the keyboard.
 
 ### Changed
 - Changed the default map center from Delhi to Kochi, Kerala, India.
@@ -35,6 +45,19 @@ Last updated: 2026-11-19 00:00:00 +0530
 - Changed the Supabase schema to store a `bin_type` value with a default of `public`.
 - Changed bin markers to use color-coded trash icons for public and private bins.
 - Changed the Supabase schema to support public delete policy for hobby-project simplicity.
+- Changed deleting to go through `delete_bin()`: one bin per request and at most 30 an hour across all visitors. The public API no longer accepts direct deletes, which let one request empty the table.
+- Changed the service worker to load pages from the network first, to skip other origins, and to cache only successful responses (cache `bin-there-v2`).
+- Changed the service worker to register only in production builds.
+- Changed full-screen mode to keep the same map instead of creating a second one.
+- Changed the feedback dialog backdrop to block map clicks and to close the dialog when clicked.
+- Changed confirming a delete to close the bin's popup.
+- Changed the add/edit form, errors and status messages to float over the map in every view, instead of being inserted above it.
+- Changed the map section from a 150vh sticky layout to a normal one.
+- Changed mouse-wheel zooming on the page view to need Ctrl (⌘ on Mac) or a trackpad pinch; a plain wheel scrolls the page. Full screen zooms with the wheel as before.
+- Changed Locate Me to zoom in to street level (16) and never zoom out.
+- Changed the install button to appear only when it can do something: the browser's install prompt, or Add to Home Screen / Add to Dock steps on Safari. It hides once the app is installed.
+- Changed the popup type badge to green for public and yellow for private bins.
+- Changed muted text, placeholders, the danger button and success text to meet WCAG AA contrast, and focus rings to a solid 3px outline.
 
 ### Fixed
 - Fixed the startup white-screen issue caused by missing Supabase environment variables.
@@ -42,6 +65,23 @@ Last updated: 2026-11-19 00:00:00 +0530
 - Improved the UX around Supabase API errors by showing more specific guidance for schema issues.
 - Fixed bin saves against older Supabase schemas by falling back to coordinate-only inserts and showing a clearer missing-column message.
 - Fixed legacy save fallback handling so older Supabase tables can still accept new bins before `bin_type` is added.
+- Fixed installed users staying on an old version of the app after a deploy.
+- Fixed `npm run dev` serving stale code from a leftover service worker.
+- Fixed the add-bin form, errors and status messages being hidden in full-screen mode.
+- Fixed full-screen mode resetting the map position, zoom, open popup and page scroll position.
+- Fixed the add-bin form opening after a click that closed a popup, after a double-click zoom, and after a click behind the feedback dialog.
+- Fixed a second tap on the map clearing the title and description already typed.
+- Fixed feedback made only of spaces being sent.
+- Fixed a misleading "run schema.sql" message when deleting a bin that was already removed.
+- Fixed bins beyond the first 1,000 silently missing from the map; bins now load in pages.
+- Fixed every marker being rebuilt each time the map moved or a form changed.
+- Fixed place-name lookups exceeding Nominatim's one-request-per-second limit; they now wait a second after the map stops and are cached by area.
+- Fixed the install button doing nothing on iOS Safari, in browsers without an install prompt, after the prompt was dismissed, and in the installed app.
+- Fixed feedback errors showing in the green success style.
+- Fixed a reopened feedback dialog being closed by the previous submission's timer.
+- Fixed the feedback dialog: Escape closes it, focus moves into it and back out, Tab stays inside it, and the map controls no longer draw over it.
+- Fixed a double-tapped delete sending two requests, the status saying "Saving new bin..." while deleting, and Cancel staying active while saving.
+- Fixed map markers having no accessible name for screen readers.
 
 ### Notes
 - The app is designed around a zero-cost hobby stack:
