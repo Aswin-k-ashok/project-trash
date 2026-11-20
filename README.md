@@ -44,6 +44,8 @@ A minimal hobby-friendly waste bin locator built with React, Vite, Leaflet, Open
 
 Create a free Supabase project and run the SQL from [supabase/schema.sql](./supabase/schema.sql) in the SQL Editor.
 
+Run it again whenever `schema.sql` changes. It is safe to re-run.
+
 ## 2. Add environment variables
 
 Copy `.env.example` to `.env` and fill in your project values:
@@ -92,3 +94,5 @@ The ping cannot wake a project that is already paused. If the job fails with a D
 - The map uses OpenStreetMap tiles, so there is no Google Maps cost.
 - Supabase free tier is enough for a hobby project, as long as the keep-awake workflow is running.
 - For production, make sure your Supabase Row Level Security policies match how open you want the project to be.
+- Anyone can delete a bin, but only one per request and at most 30 an hour across all visitors. Every deleted bin is copied to the `deleted_bins` table first; the comment above that table in `schema.sql` has a query to restore them.
+- The service worker only runs in production builds (`npm run build`, then `npm run preview` or a deploy), so `npm run dev` always serves fresh code.

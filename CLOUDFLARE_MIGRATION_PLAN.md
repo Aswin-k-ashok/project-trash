@@ -3,7 +3,7 @@
 Move **Bin There** from **Supabase (database) + Vercel (hosting)** to **Cloudflare Workers (hosting + API) + Cloudflare D1 (database)**, staying on free plans.
 
 - Written: 2026-11-19
-- Status: Not started. The daily Supabase ping (`.github/workflows/keep-supabase-awake.yml`) covers the gap until cutover.
+- Status: Phase 0 step 1 (the service worker fix) is done in code as of 2026-11-20 and needs deploying. Later phases not started. The daily Supabase ping (`.github/workflows/keep-supabase-awake.yml`) covers the gap until cutover.
 - Rough effort: 1 to 2 focused days, plus a few days of waiting between phases for browsers to pick up the service worker fix.
 
 ---
@@ -14,7 +14,7 @@ Move **Bin There** from **Supabase (database) + Vercel (hosting)** to **Cloudfla
 |---|---|
 | Supabase pauses free projects after 7 days with no activity. On 2026-11-19 the project hostname already returned "no such domain", meaning it was paused. | D1 on the Workers Free plan does not pause. |
 | Running depends on a keep-awake workaround. | Nothing to keep awake. |
-| Any visitor can delete any bin (`Public can delete bins` policy). | All writes go through our own API, so delete rules can be tightened (Phase 8). |
+| Any visitor can delete any bin, through the `delete_bin()` function: one bin per call, at most 30 an hour, each copied to `deleted_bins` first. | All writes go through our own API, so delete rules can be tightened (Phase 8). |
 | Hosting and database are with two providers, set up with two sets of env vars. | One provider and one config file, with no secrets in the frontend. |
 
 Vercel itself works fine. It moves only because Cloudflare can serve the site and the API from the same Worker.
@@ -29,19 +29,22 @@ Vercel itself works fine. It moves only because Cloudflare can serve the site an
 
 | Table | Columns | Anon access (RLS) |
 |---|---|---|
-| `bins` | `id uuid`, `latitude double`, `longitude double`, `bin_type text default 'public'`, `title text`, `description text`, `created_at timestamptz` | select, insert, delete |
+| `bins` | `id uuid`, `latitude double`, `longitude double`, `bin_type text default 'public'`, `title text`, `description text`, `created_at timestamptz` | select, insert; delete only through `delete_bin(bin_id)` |
 | `app_feedback` | `id uuid`, `name text`, `feedback text`, `created_at timestamptz` | insert only |
+| `deleted_bins` | the `bins` columns plus `deletion_id`, `deleted_at`; an archive of deleted bins | none |
+
+Check constraints limit `bin_type` to `public`/`private`, coordinates to valid ranges, and text to the same lengths as the Phase 4 validation rules.
 
 **Every database call** is in [src/components/BinMap.jsx](src/components/BinMap.jsx) and goes through [src/lib/supabase.js](src/lib/supabase.js):
 
-| What | Where | Supabase call |
+| What | Where (`BinMap.jsx`) | Supabase call |
 |---|---|---|
-| Load all bins | `BinMap.jsx` ~L189 | `from('bins').select('*').order('created_at', { ascending: false })` |
-| Add a bin | ~L348 | `insert(payload).select().single()`, plus a "legacy insert" fallback at ~L357–382 for old schemas |
-| Delete a bin | ~L418 | `delete().eq('id', binId).select('id')` |
-| Send feedback | ~L458 | `from('app_feedback').insert({ name, feedback })` |
+| Load all bins | `loadBins` | `from('bins').select('*').order('created_at', { ascending: false })` |
+| Add a bin | `handleSaveDraftBin` | `insert(payload).select().single()`, plus a "legacy insert" fallback for old schemas |
+| Delete a bin | `handleDeleteBin` | `rpc('delete_bin', { bin_id })`, which returns `false` if the bin was already gone |
+| Send feedback | `handleFeedbackSubmit` | `from('app_feedback').insert({ name, feedback })` |
 
-The app does not use Supabase auth, storage, realtime or RPC.
+The app does not use Supabase auth, storage or realtime. Its one RPC is `delete_bin`.
 
 **Service worker problems found during review** (they affect the cutover, so Phase 0 fixes them first):
 
@@ -113,6 +116,8 @@ Each phase ends in a working app, so you can stop between any two.
 ### Phase 0: Fix the service worker on the current stack (small)
 
 **Goal:** make sure browsers pick up new deploys. Without this, cutover users stay on the old build.
+
+**Status:** step 1 done in code on 2026-11-20. `src/main.jsx` now also registers the worker only in production builds, and removes a leftover one under `npm run dev`. Next: steps 2 and 3.
 
 1. Update `public/sw.js`:
    - skip non-GET requests, cross-origin requests and `/api/*` (never cache the API);
@@ -289,6 +294,8 @@ Every error has the shape `{ "error": { "message": "..." } }`, and every respons
 
 **Validation rules:** latitude must be a number from -90 to 90 and longitude from -180 to 180; `bin_type` must be `public` or `private` (default `public`); text is trimmed and an empty string becomes `null`; title is at most 80 characters, description 500, name 80, and feedback 1 to 2,000; the request body is at most 10 KB.
 
+**Delete parity.** On Supabase, `delete_bin()` allows at most 30 deletes an hour and copies each deleted bin to `deleted_bins`. The `deleteBin` below does neither. To keep those protections, add a `deleted_bins` table in Phase 3 and do the same count and copy here. Otherwise accept losing them until Phase 8.
+
 **`worker/index.js` starting point:**
 
 ```js
@@ -461,15 +468,15 @@ export default {
    export const sendFeedback = (entry) => request('/api/feedback', { method: 'POST', body: entry });
    ```
 2. Edit `src/components/BinMap.jsx`:
-   - **L14:** import `{ listBins, createBin, deleteBin, sendFeedback }` from `../lib/api` instead of Supabase.
-   - **L91–131:** delete `getSupabaseErrorMessage`, `getMissingBinColumn`, `getDeleteFailureMessage` and `getFeedbackErrorMessage`. Use `error.message` (already user-friendly) with the existing fallback text.
-   - **L133–155:** simplify `buildBinPayload` (the `includeBinType` / `includeOptionalFields` options only existed for the legacy fallback).
-   - **Remove the `isSupabaseConfigured` guards** at ~L178–184, L285–290, L400–405 and L448–453. With a same-origin API there's no config to miss.
-   - **~L189:** `const { data, error } = await listBins();`
-   - **~L348–392:** `const { data, error } = await createBin(buildBinPayload(draftBin));` and drop the legacy-insert block.
-   - **~L418–439:** `const { error } = await deleteBin(binId);`. Treat `error.status === 404` as already deleted: remove it from the list and show a short note.
-   - **~L458:** `await sendFeedback({ name: ..., feedback: ... })`.
-   - **Rendering (~L663–689) stays the same**, because the field names (`id`, `latitude`, `longitude`, `bin_type`, `title`, `description`) are unchanged.
+   - **Imports:** import `{ listBins, createBin, deleteBin, sendFeedback }` from `../lib/api` instead of Supabase.
+   - **Error helpers:** delete `getSupabaseErrorMessage`, `getMissingBinColumn`, `getDeleteErrorMessage` and `getFeedbackErrorMessage`. Use `error.message` (already user-friendly) with the existing fallback text.
+   - **`buildBinPayload`:** simplify it (the `includeBinType` / `includeOptionalFields` options only existed for the legacy fallback).
+   - **Remove the `isSupabaseConfigured` guards** in `loadBins`, `markNewBin`, `handleDeleteBin` and `handleFeedbackSubmit`. With a same-origin API there's no config to miss.
+   - **`loadBins`:** `const { data, error } = await listBins();`
+   - **`handleSaveDraftBin`:** `const { data, error } = await createBin(buildBinPayload(draftBin));` and drop the legacy-insert block.
+   - **`handleDeleteBin`:** replace the `supabase.rpc('delete_bin', ...)` call with `const { error } = await deleteBin(binId);`. Treat `error.status === 404` the way `wasDeleted === false` is handled now: remove the bin from the list and show "This bin had already been removed."
+   - **`handleFeedbackSubmit`:** `await sendFeedback({ name: ..., feedback: ... })`.
+   - **Rendering (the `bins.map(...)` markers and popups) stays the same**, because the field names (`id`, `latitude`, `longitude`, `bin_type`, `title`, `description`) are unchanged.
 3. Remove Supabase from the frontend: delete `src/lib/supabase.js`, run `npm uninstall @supabase/supabase-js`, and remove both vars from `.env.example` (delete the file if nothing is left).
 4. Keep `supabase/schema.sql` until Phase 9 as a record of the old setup.
 

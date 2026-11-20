@@ -344,16 +344,76 @@ select:focus-visible {
   overflow: hidden;
 }
 
-.map-fullscreen-portal {
-  position: fixed;
-  inset: 0;
-  z-index: 1200;
+/* backdrop-filter makes the card the containing block for fixed-position
+   children, which would trap the full-screen map inside the card. */
+body.map-fullscreen-open .map-card {
+  backdrop-filter: none;
 }
 
-.map-wrapper--fullscreen .toolbar,
-.map-wrapper--fullscreen .error-banner,
-.map-wrapper--fullscreen .bin-form {
+/* Status chips and errors. In normal view the box disappears and its children
+   lay out in the wrapper as before; in full screen they float over the map. */
+.map-notices {
+  display: contents;
+}
+
+.map-wrapper--fullscreen .map-notices {
+  position: absolute;
+  top: max(12px, env(safe-area-inset-top));
+  /* Leaves room for the zoom control in the top-left corner. */
+  left: 56px;
+  right: 56px;
+  z-index: 1100;
+  display: grid;
+  gap: 8px;
+  justify-items: center;
+  max-width: 460px;
+  margin: 0 auto;
+  pointer-events: none;
+}
+
+.map-wrapper--fullscreen .toolbar {
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.map-wrapper--fullscreen .toolbar__copy {
   display: none;
+}
+
+.map-wrapper--fullscreen .status-group {
+  justify-content: center;
+  min-height: 0;
+}
+
+.map-wrapper--fullscreen .status,
+.map-wrapper--fullscreen .error-banner {
+  box-shadow: var(--shadow-float);
+}
+
+.map-wrapper--fullscreen .error-banner {
+  width: 100%;
+  pointer-events: auto;
+}
+
+.map-wrapper--fullscreen .bin-form {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: max(12px, env(safe-area-inset-bottom));
+  z-index: 1100;
+  max-width: 430px;
+  max-height: calc(100% - 140px);
+  margin: 0 auto;
+  overflow-y: auto;
+  /* Opaque, so the map controls underneath don't show through. */
+  background: var(--surface-strong);
+  box-shadow: var(--shadow-modal);
+}
+
+/* Keep the floating form short so more of the map stays visible. */
+.map-wrapper--fullscreen .bin-form .field textarea {
+  min-height: 72px;
 }
 
 .map-wrapper--fullscreen .map-stage {
@@ -406,12 +466,38 @@ select:focus-visible {
 }
 
 .error-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
   margin: 0;
   padding: 12px 14px;
   border-radius: 18px;
   border: 1px solid rgba(207, 77, 93, 0.12);
   background: var(--danger-soft);
   color: var(--danger-text);
+}
+
+.error-banner p {
+  flex: 1;
+  margin: 0;
+}
+
+.error-banner__close {
+  flex: 0 0 auto;
+  width: 28px;
+  height: 28px;
+  margin: -3px -6px -3px 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: inherit;
+  font-size: 1.2rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.error-banner__close:hover {
+  background: rgba(207, 77, 93, 0.1);
 }
 
 .bin-form,
@@ -585,12 +671,10 @@ select:focus-visible {
   place-items: end center;
   padding: 18px;
   background: linear-gradient(180deg, rgba(30, 22, 40, 0.02), rgba(30, 22, 40, 0.26));
-  pointer-events: none;
 }
 
 .feedback-form {
   width: min(430px, 100%);
-  pointer-events: auto;
   box-shadow: var(--shadow-modal);
 }
 
@@ -731,6 +815,13 @@ select:focus-visible {
 
 .trash-bin-marker--private {
   background: linear-gradient(180deg, #f0c14f 0%, #d39d18 100%);
+}
+
+/* The not-yet-saved bin from the add-bin form. */
+.trash-bin-marker--draft {
+  outline: 2px dashed var(--primary-strong);
+  outline-offset: 3px;
+  cursor: grab;
 }
 
 .trash-bin-marker__emoji {

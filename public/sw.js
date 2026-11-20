@@ -1,4 +1,6 @@
-const CACHE_NAME = 'bin-there-v1';
+// Bump the version whenever this file's caching rules change; `activate`
+// deletes every cache with a different name.
+const CACHE_NAME = 'bin-there-v2';
 const APP_SHELL_ASSETS = [
   '/',
   '/manifest.webmanifest',
@@ -28,31 +30,50 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
+function cacheIfOk(cacheKey, response) {
+  if (response.ok) {
+    const copy = response.clone();
+    caches.open(CACHE_NAME).then((cache) => cache.put(cacheKey, copy));
+  }
+
+  return response;
+}
+
 self.addEventListener('fetch', (event) => {
-  if (event.request.method !== 'GET') {
+  const { request } = event;
+  const url = new URL(request.url);
+
+  // Leave writes, other origins (map tiles, Nominatim, Supabase) and the
+  // future same-origin API to the browser. None of them should be cached here.
+  if (
+    request.method !== 'GET' ||
+    url.origin !== self.location.origin ||
+    url.pathname.startsWith('/api/')
+  ) {
     return;
   }
 
+  // Page loads go to the network first so a new deploy shows up on the next
+  // reload. The cached shell is only the offline fallback.
+  if (request.mode === 'navigate') {
+    event.respondWith(
+      fetch(request)
+        .then((response) => cacheIfOk('/', response))
+        .catch(() =>
+          caches.match('/').then((cached) => cached || Response.error())
+        )
+    );
+    return;
+  }
+
+  // Everything else is a static file. Vite puts a content hash in built asset
+  // names, so serving them from the cache can never return stale code.
   event.respondWith(
-    caches.match(event.request).then((cachedResponse) => {
-      if (cachedResponse) {
-        return cachedResponse;
-      }
-
-      return fetch(event.request)
-        .then((networkResponse) => {
-          const url = new URL(event.request.url);
-
-          if (url.origin === self.location.origin) {
-            const responseClone = networkResponse.clone();
-            caches.open(CACHE_NAME).then((cache) => {
-              cache.put(event.request, responseClone);
-            });
-          }
-
-          return networkResponse;
-        })
-        .catch(() => caches.match('/'));
-    })
+    caches
+      .match(request)
+      .then(
+        (cached) =>
+          cached || fetch(request).then((response) => cacheIfOk(request, response))
+      )
   );
 });

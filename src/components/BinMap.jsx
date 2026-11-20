@@ -1,5 +1,4 @@
-import { useEffect, useState } from 'react';
-import { createPortal } from 'react-dom';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   MapContainer,
   Marker,
@@ -20,11 +19,22 @@ function getBinType(binType) {
   return binType === BIN_TYPE_PRIVATE ? BIN_TYPE_PRIVATE : BIN_TYPE_PUBLIC;
 }
 
-function createTrashBinIcon(binType) {
+// Same limits as the database checks in supabase/schema.sql.
+const MAX_TITLE_LENGTH = 80;
+const MAX_DESCRIPTION_LENGTH = 500;
+const MAX_FEEDBACK_NAME_LENGTH = 80;
+const MAX_FEEDBACK_LENGTH = 2000;
+
+// How long a click waits to see whether it is the first half of a double-click.
+const DOUBLE_CLICK_WINDOW_MS = 300;
+
+function createTrashBinIcon(binType, { isDraft = false } = {}) {
+  const draftClass = isDraft ? ' trash-bin-marker--draft' : '';
+
   return L.divIcon({
     className: 'trash-bin-marker-wrapper',
     html: `
-      <div class="trash-bin-marker trash-bin-marker--${getBinType(binType)}" aria-hidden="true">
+      <div class="trash-bin-marker trash-bin-marker--${binType}${draftClass}" aria-hidden="true">
         <span class="trash-bin-marker__emoji">&#128465;</span>
       </div>
     `,
@@ -34,6 +44,18 @@ function createTrashBinIcon(binType) {
   });
 }
 
+// Built once and shared. react-leaflet replaces a marker's icon whenever the
+// icon object changes, so a new object per render rebuilt every marker.
+const BIN_ICONS = {
+  [BIN_TYPE_PUBLIC]: createTrashBinIcon(BIN_TYPE_PUBLIC),
+  [BIN_TYPE_PRIVATE]: createTrashBinIcon(BIN_TYPE_PRIVATE),
+};
+
+const DRAFT_BIN_ICONS = {
+  [BIN_TYPE_PUBLIC]: createTrashBinIcon(BIN_TYPE_PUBLIC, { isDraft: true }),
+  [BIN_TYPE_PRIVATE]: createTrashBinIcon(BIN_TYPE_PRIVATE, { isDraft: true }),
+};
+
 const userLocationIcon = L.divIcon({
   className: 'user-location-marker-wrapper',
   html: '<div class="user-location-marker" aria-hidden="true"></div>',
@@ -41,12 +63,68 @@ const userLocationIcon = L.divIcon({
   iconAnchor: [9, 9],
 });
 
+// Leaflet also fires `click` for a tap that only closes a popup and for both
+// halves of a double-click zoom. Those should not open the add-bin form.
 function AddBinOnClick({ onAdd }) {
+  const pendingClickRef = useRef(null);
+  const popupJustClosedRef = useRef(false);
+
+  useEffect(() => () => window.clearTimeout(pendingClickRef.current), []);
+
+  function cancelPendingClick() {
+    window.clearTimeout(pendingClickRef.current);
+    pendingClickRef.current = null;
+  }
+
   useMapEvents({
-    click(event) {
-      onAdd(event.latlng);
+    popupclose() {
+      // A tap that closes a popup fires `popupclose` and then `click` in the
+      // same event dispatch, so the flag only needs to last until the next task.
+      popupJustClosedRef.current = true;
+      window.setTimeout(() => {
+        popupJustClosedRef.current = false;
+      }, 0);
     },
+    click(event) {
+      if (popupJustClosedRef.current) {
+        return;
+      }
+
+      if (pendingClickRef.current) {
+        // Second click of a double-click: let Leaflet zoom instead.
+        cancelPendingClick();
+        return;
+      }
+
+      // wrap() keeps longitude within -180..180 after panning past the date line.
+      const latlng = event.latlng.wrap();
+
+      pendingClickRef.current = window.setTimeout(() => {
+        pendingClickRef.current = null;
+        onAdd(latlng);
+      }, DOUBLE_CLICK_WINDOW_MS);
+    },
+    dblclick: cancelPendingClick,
   });
+
+  return null;
+}
+
+// Leaflet only measures its container on window resize. Entering or leaving
+// full screen resizes the container without one, so watch it directly.
+function MapSizeWatcher() {
+  const map = useMap();
+
+  useEffect(() => {
+    if (typeof ResizeObserver === 'undefined') {
+      return undefined;
+    }
+
+    const observer = new ResizeObserver(() => map.invalidateSize());
+    observer.observe(map.getContainer());
+
+    return () => observer.disconnect();
+  }, [map]);
 
   return null;
 }
@@ -81,13 +159,6 @@ function MapController({ targetLocation }) {
   return null;
 }
 
-function FullscreenMapPortal({ children }) {
-  return createPortal(
-    <div className="map-fullscreen-portal">{children}</div>,
-    document.body
-  );
-}
-
 function getSupabaseErrorMessage(error, fallbackMessage) {
   if (!error) {
     return fallbackMessage;
@@ -95,6 +166,10 @@ function getSupabaseErrorMessage(error, fallbackMessage) {
 
   if (error.code === 'PGRST205') {
     return "Supabase cannot find the 'bins' table. Run the SQL from supabase/schema.sql in your Supabase SQL Editor, then refresh the app.";
+  }
+
+  if (error.code === '23514') {
+    return 'Some of the details were not accepted, for example text that is too long. Please check them and try again.';
   }
 
   const missingColumnMatch = error.message?.match(
@@ -118,8 +193,15 @@ function getMissingBinColumn(error) {
   return missingColumnMatch ? missingColumnMatch[1] : null;
 }
 
-function getDeleteFailureMessage() {
-  return "The bin could not be deleted from Supabase. Run the latest SQL from supabase/schema.sql in your Supabase SQL Editor to make sure the delete policy is installed, then refresh the app.";
+function getDeleteErrorMessage(error) {
+  if (error?.code === 'PGRST202') {
+    return "Supabase cannot find the 'delete_bin' function. Run the latest SQL from supabase/schema.sql in your Supabase SQL Editor, then refresh the app.";
+  }
+
+  return getSupabaseErrorMessage(
+    error,
+    'Could not delete the bin. Please try again.'
+  );
 }
 
 function getFeedbackErrorMessage(error) {
@@ -172,6 +254,63 @@ function BinMap() {
     feedback: '',
   });
   const [feedbackStatusMessage, setFeedbackStatusMessage] = useState('');
+  const mapRef = useRef(null);
+  const binFormRef = useRef(null);
+
+  // A new array on every render would make react-leaflet move the draft marker
+  // back to the stored position, even in the middle of a drag.
+  const draftLatitude = draftBin?.latitude;
+  const draftLongitude = draftBin?.longitude;
+  const draftPosition = useMemo(
+    () =>
+      draftLatitude === undefined ? null : [draftLatitude, draftLongitude],
+    [draftLatitude, draftLongitude]
+  );
+
+  const draftMarkerHandlers = useMemo(
+    () => ({
+      dragend(event) {
+        const { lat, lng } = event.target.getLatLng().wrap();
+
+        setDraftBin((currentDraft) =>
+          currentDraft
+            ? { ...currentDraft, latitude: lat, longitude: lng }
+            : currentDraft
+        );
+      },
+    }),
+    []
+  );
+
+  // In full screen the add form floats over the bottom of the map and, on a
+  // phone, can hide the pin just placed. Pan the map so the pin sits above it.
+  useEffect(() => {
+    const map = mapRef.current;
+    const form = binFormRef.current;
+
+    if (!isFullscreen || !draftPosition || !map || !form) {
+      return;
+    }
+
+    // Measure with the full-screen size, even if the resize watcher hasn't run yet.
+    map.invalidateSize();
+
+    const mapRect = map.getContainer().getBoundingClientRect();
+    const formRect = form.getBoundingClientRect();
+    const pin = map.latLngToContainerPoint(draftPosition);
+    const pinX = mapRect.left + pin.x;
+    const pinBottom = mapRect.top + pin.y;
+    const gap = 24;
+
+    const isUnderForm =
+      pinX > formRect.left - gap &&
+      pinX < formRect.right + gap &&
+      pinBottom > formRect.top - gap;
+
+    if (isUnderForm) {
+      map.panBy([0, pinBottom - (formRect.top - gap)]);
+    }
+  }, [isFullscreen, draftPosition]);
 
   useEffect(() => {
     async function loadBins() {
@@ -268,16 +407,25 @@ function BinMap() {
     };
   }, [mapCenter]);
 
-  useEffect(() => {
+  // A layout effect, so the body class is in place before the browser paints.
+  // Without it, `backdrop-filter` on the map card would hold the fixed map
+  // inside the card for a frame (see `map-fullscreen-open` in index.css).
+  useLayoutEffect(() => {
     if (!isFullscreen) {
       return undefined;
     }
 
     const previousOverflow = document.body.style.overflow;
+    // The map leaves the page flow in full screen, so the page gets shorter
+    // and the browser may scroll up. Put the reader back where they were.
+    const previousScrollY = window.scrollY;
     document.body.style.overflow = 'hidden';
+    document.body.classList.add('map-fullscreen-open');
 
     return () => {
       document.body.style.overflow = previousOverflow;
+      document.body.classList.remove('map-fullscreen-open');
+      window.scrollTo(0, previousScrollY);
     };
   }, [isFullscreen]);
 
@@ -290,13 +438,15 @@ function BinMap() {
     }
 
     setErrorMessage('');
-    setDraftBin({
-      latitude: latlng.lat,
-      longitude: latlng.lng,
+    // Tapping again while a draft is open moves the pin and keeps what was typed.
+    setDraftBin((currentDraft) => ({
       binType: BIN_TYPE_PUBLIC,
       title: '',
       description: '',
-    });
+      ...currentDraft,
+      latitude: latlng.lat,
+      longitude: latlng.lng,
+    }));
   }
 
   function handleDraftChange(event) {
@@ -412,33 +562,30 @@ function BinMap() {
       return;
     }
 
+    // Close the popup first. In full screen an error banner would otherwise
+    // land on top of it, covering its close button.
+    mapRef.current?.closePopup();
     setIsSaving(true);
     setErrorMessage('');
 
-    const { data, error } = await supabase
-      .from('bins')
-      .delete()
-      .eq('id', binId)
-      .select('id');
+    // Deletes go through a database function that removes one bin per call
+    // and keeps a copy; see delete_bin() in supabase/schema.sql.
+    const { data: wasDeleted, error } = await supabase.rpc('delete_bin', {
+      bin_id: binId,
+    });
 
     if (error) {
-      setErrorMessage(
-        getSupabaseErrorMessage(
-          error,
-          'Could not delete the bin. Please try again.'
-        )
-      );
-      setIsSaving(false);
-      return;
-    }
-
-    if (!data || data.length === 0) {
-      setErrorMessage(getDeleteFailureMessage());
+      setErrorMessage(getDeleteErrorMessage(error));
       setIsSaving(false);
       return;
     }
 
     setBins((currentBins) => currentBins.filter((bin) => bin.id !== binId));
+
+    if (!wasDeleted) {
+      setErrorMessage('This bin had already been removed.');
+    }
+
     setIsSaving(false);
   }
 
@@ -452,12 +599,20 @@ function BinMap() {
       return;
     }
 
+    const feedbackText = feedbackForm.feedback.trim();
+
+    // `required` lets text made only of spaces through; the database rejects it.
+    if (!feedbackText) {
+      setFeedbackStatusMessage('Please write your feedback before sending.');
+      return;
+    }
+
     setIsSubmittingFeedback(true);
     setFeedbackStatusMessage('');
 
     const { error } = await supabase.from('app_feedback').insert({
       name: feedbackForm.name.trim() || null,
-      feedback: feedbackForm.feedback.trim(),
+      feedback: feedbackText,
     });
 
     if (error) {
@@ -559,7 +714,18 @@ function BinMap() {
         </button>
 
         {isFeedbackOpen && (
-          <div className="feedback-modal" role="dialog" aria-modal="true">
+          // The backdrop catches clicks so they can't reach the map below and
+          // open the add-bin form; clicking it closes the dialog instead.
+          <div
+            className="feedback-modal"
+            role="dialog"
+            aria-modal="true"
+            onClick={(event) => {
+              if (event.target === event.currentTarget) {
+                closeFeedbackForm();
+              }
+            }}
+          >
             <form className="feedback-form" onSubmit={handleFeedbackSubmit}>
               <div className="feedback-form__header">
                 <h3>App Feedback</h3>
@@ -585,6 +751,7 @@ function BinMap() {
                   name="name"
                   value={feedbackForm.name}
                   onChange={handleFeedbackChange}
+                  maxLength={MAX_FEEDBACK_NAME_LENGTH}
                   placeholder="Your name"
                 />
               </label>
@@ -595,6 +762,7 @@ function BinMap() {
                   name="feedback"
                   value={feedbackForm.feedback}
                   onChange={handleFeedbackChange}
+                  maxLength={MAX_FEEDBACK_LENGTH}
                   rows="4"
                   placeholder="Tell us what would make the app better"
                   required
@@ -627,6 +795,7 @@ function BinMap() {
         )}
 
         <MapContainer
+          ref={mapRef}
           center={DEFAULT_CENTER}
           zoom={DEFAULT_ZOOM}
           scrollWheelZoom
@@ -640,6 +809,19 @@ function BinMap() {
           <AddBinOnClick onAdd={markNewBin} />
           <MapCenterTracker onCenterChange={setMapCenter} />
           <MapController targetLocation={userLocation} />
+          <MapSizeWatcher />
+
+          {draftPosition && (
+            <Marker
+              position={draftPosition}
+              icon={DRAFT_BIN_ICONS[getBinType(draftBin.binType)]}
+              draggable
+              zIndexOffset={1000}
+              title="New bin. Drag to adjust, or tap elsewhere on the map to move it."
+              alt="New bin location"
+              eventHandlers={draftMarkerHandlers}
+            />
+          )}
 
           {userLocation && (
             <Marker
@@ -662,7 +844,7 @@ function BinMap() {
             <Marker
               key={bin.id}
               position={[bin.latitude, bin.longitude]}
-              icon={createTrashBinIcon(bin.bin_type)}
+              icon={BIN_ICONS[getBinType(bin.bin_type)]}
             >
               <Popup>
                 <div className="popup-content">
@@ -699,11 +881,14 @@ function BinMap() {
     );
   }
 
+  // The map is rendered in exactly one place. Full screen is only a CSS class,
+  // so toggling it keeps the same Leaflet map: position, zoom and open popups.
   return (
-    <>
-      <div className={`map-wrapper${isFullscreen ? ' map-wrapper--fullscreen' : ''}`}>
+    <div className={`map-wrapper${isFullscreen ? ' map-wrapper--fullscreen' : ''}`}>
+      {/* In normal view these sit above the map; in full screen, over it. */}
+      <div className="map-notices">
         <div className="toolbar">
-          <div>
+          <div className="toolbar__copy">
             <h2>Current Area: {placeName}</h2>
             <p>Tap the map to add a waste bin. No paperwork required.</p>
           </div>
@@ -714,75 +899,88 @@ function BinMap() {
           </div>
         </div>
 
-        {errorMessage && <p className="error-banner">{errorMessage}</p>}
-
-        {draftBin && (
-          <form className="bin-form" onSubmit={handleSaveDraftBin}>
-            <div className="bin-form-header">
-              <h3>Add New Bin</h3>
-              <p>
-                {draftBin.latitude.toFixed(5)}, {draftBin.longitude.toFixed(5)}
-              </p>
-            </div>
-
-            <label className="field">
-              <span>Bin Type</span>
-              <select
-                name="binType"
-                value={draftBin.binType}
-                onChange={handleDraftChange}
-              >
-                <option value={BIN_TYPE_PUBLIC}>Public</option>
-                <option value={BIN_TYPE_PRIVATE}>Private</option>
-              </select>
-            </label>
-
-            <label className="field">
-              <span>Title</span>
-              <input
-                type="text"
-                name="title"
-                value={draftBin.title}
-                onChange={handleDraftChange}
-                placeholder="Example: Near bus stop"
-              />
-            </label>
-
-            <label className="field">
-              <span>Description</span>
-              <textarea
-                name="description"
-                value={draftBin.description}
-                onChange={handleDraftChange}
-                rows="3"
-                placeholder="Add any details that help identify this bin"
-              />
-            </label>
-
-            <div className="form-actions">
-              <button
-                type="button"
-                className="button button-secondary"
-                onClick={handleCancelDraft}
-              >
-                Cancel
-              </button>
-              <button type="submit" className="button" disabled={isSaving}>
-                {isSaving ? 'Saving...' : 'Save Bin'}
-              </button>
-            </div>
-          </form>
+        {errorMessage && (
+          <div className="error-banner" role="alert">
+            <p>{errorMessage}</p>
+            <button
+              type="button"
+              className="error-banner__close"
+              onClick={() => setErrorMessage('')}
+              aria-label="Dismiss message"
+            >
+              ×
+            </button>
+          </div>
         )}
-
-        {!isFullscreen && renderMapStage()}
       </div>
 
-      {isFullscreen && (
-        <FullscreenMapPortal>
-          <div className="map-wrapper map-wrapper--fullscreen">{renderMapStage()}</div>
-        </FullscreenMapPortal>
+      {draftBin && (
+        <form
+          ref={binFormRef}
+          className="bin-form"
+          onSubmit={handleSaveDraftBin}
+        >
+          <div className="bin-form-header">
+            <h3>Add New Bin</h3>
+            <p>
+              {draftBin.latitude.toFixed(5)}, {draftBin.longitude.toFixed(5)}
+            </p>
+            <p>Drag the pin or tap the map to move it.</p>
+          </div>
+
+          <label className="field">
+            <span>Bin Type</span>
+            <select
+              name="binType"
+              value={draftBin.binType}
+              onChange={handleDraftChange}
+            >
+              <option value={BIN_TYPE_PUBLIC}>Public</option>
+              <option value={BIN_TYPE_PRIVATE}>Private</option>
+            </select>
+          </label>
+
+          <label className="field">
+            <span>Title</span>
+            <input
+              type="text"
+              name="title"
+              value={draftBin.title}
+              onChange={handleDraftChange}
+              maxLength={MAX_TITLE_LENGTH}
+              placeholder="Example: Near bus stop"
+            />
+          </label>
+
+          <label className="field">
+            <span>Description</span>
+            <textarea
+              name="description"
+              value={draftBin.description}
+              onChange={handleDraftChange}
+              maxLength={MAX_DESCRIPTION_LENGTH}
+              rows="3"
+              placeholder="Add any details that help identify this bin"
+            />
+          </label>
+
+          <div className="form-actions">
+            <button
+              type="button"
+              className="button button-secondary"
+              onClick={handleCancelDraft}
+            >
+              Cancel
+            </button>
+            <button type="submit" className="button" disabled={isSaving}>
+              {isSaving ? 'Saving...' : 'Save Bin'}
+            </button>
+          </div>
+        </form>
       )}
-    </>
+
+      {renderMapStage()}
+    </div>
   );
 }
 
