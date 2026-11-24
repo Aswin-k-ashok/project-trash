@@ -10,7 +10,6 @@ import {
 import {
   MapContainer,
   Marker,
-  Popup,
   TileLayer,
   useMap,
   useMapEvents,
@@ -19,9 +18,23 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { DEFAULT_CENTER, DEFAULT_ZOOM } from '../config';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
+import InstallButton from './InstallButton';
+import {
+  BinIcon,
+  CloseIcon,
+  DirectionsIcon,
+  LocateIcon,
+  MessageIcon,
+  MinusIcon,
+  PencilIcon,
+  PlusIcon,
+  TrashIcon,
+  binIconMarkup,
+} from './icons';
 
 const BIN_TYPE_PUBLIC = 'public';
 const BIN_TYPE_PRIVATE = 'private';
+const BIN_TYPES = [BIN_TYPE_PUBLIC, BIN_TYPE_PRIVATE];
 const BIN_TYPE_LABELS = {
   [BIN_TYPE_PUBLIC]: 'Public',
   [BIN_TYPE_PRIVATE]: 'Private',
@@ -48,35 +61,39 @@ const PLACE_LOOKUP_DELAY_MS = 1000;
 const SUCCESS_MESSAGE_MS = 4000;
 const FEEDBACK_CLOSE_DELAY_MS = 1200;
 
-const IS_APPLE_DEVICE = /Mac|iPhone|iPad|iPod/.test(navigator.userAgent);
+// From this width the sheet sits in a side panel instead of along the bottom.
+// Keep in step with the 900px breakpoint in index.css.
+const WIDE_LAYOUT_QUERY = '(min-width: 900px)';
+// Space kept between a bin or pin and the panel or sheet that covers the map.
+const OVERLAY_GAP = 24;
 
-function createTrashBinIcon(binType, { isDraft = false } = {}) {
-  const draftClass = isDraft ? ' trash-bin-marker--draft' : '';
+const MARKER_SIZES = { default: 30, selected: 40, draft: 36 };
+
+function createBinIcon(binType, variant) {
+  const size = MARKER_SIZES[variant];
+  const variantClass = variant === 'default' ? '' : ` bin-marker--${variant}`;
 
   return L.divIcon({
-    className: 'trash-bin-marker-wrapper',
-    html: `
-      <div class="trash-bin-marker trash-bin-marker--${binType}${draftClass}" aria-hidden="true">
-        <span class="trash-bin-marker__emoji">&#128465;</span>
-      </div>
-    `,
-    iconSize: [34, 34],
-    iconAnchor: [17, 34],
-    popupAnchor: [0, -28],
+    className: 'bin-marker-wrapper',
+    html: `<div class="bin-marker bin-marker--${binType}${variantClass}" aria-hidden="true">${binIconMarkup(
+      variant === 'default' ? 14 : 17
+    )}</div>`,
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
   });
 }
 
 // Built once and shared. react-leaflet replaces a marker's icon whenever the
 // icon object changes, so a new object per render rebuilt every marker.
-const BIN_ICONS = {
-  [BIN_TYPE_PUBLIC]: createTrashBinIcon(BIN_TYPE_PUBLIC),
-  [BIN_TYPE_PRIVATE]: createTrashBinIcon(BIN_TYPE_PRIVATE),
-};
-
-const DRAFT_BIN_ICONS = {
-  [BIN_TYPE_PUBLIC]: createTrashBinIcon(BIN_TYPE_PUBLIC, { isDraft: true }),
-  [BIN_TYPE_PRIVATE]: createTrashBinIcon(BIN_TYPE_PRIVATE, { isDraft: true }),
-};
+const BIN_ICONS = Object.fromEntries(
+  Object.keys(MARKER_SIZES).map((variant) => [
+    variant,
+    {
+      [BIN_TYPE_PUBLIC]: createBinIcon(BIN_TYPE_PUBLIC, variant),
+      [BIN_TYPE_PRIVATE]: createBinIcon(BIN_TYPE_PRIVATE, variant),
+    },
+  ])
+);
 
 const userLocationIcon = L.divIcon({
   className: 'user-location-marker-wrapper',
@@ -115,64 +132,83 @@ function getDirectionsUrl(bin) {
   return `https://www.google.com/maps/dir/?api=1&destination=${destination}&travelmode=walking`;
 }
 
-// When a popup opens near an edge, Leaflet pans the map to fit it. These
-// margins also keep it clear of the floating messages (top), the map buttons
-// (right) and the feedback button (bottom).
-const POPUP_PAN_PADDING_TOP_LEFT = [12, 96];
-const POPUP_PAN_PADDING_BOTTOM_RIGHT = [64, 72];
+// Pan the map, if needed, so a point isn't hidden by the floating UI.
+// Wide screens: move it right of the side panel. Phones: keep it in the strip
+// between the top bar and the map buttons that sit on top of the sheet.
+function keepPointInView(map, latlng, { isWideLayout, panel, topbar, sheet, floating }) {
+  const mapRect = map.getContainer().getBoundingClientRect();
+  const point = map.latLngToContainerPoint(latlng);
+  const x = mapRect.left + point.x;
+  const y = mapRect.top + point.y;
+
+  if (isWideLayout) {
+    const box = panel.getBoundingClientRect();
+    const isCovered =
+      x > box.left - OVERLAY_GAP &&
+      x < box.right + OVERLAY_GAP &&
+      y > box.top - OVERLAY_GAP &&
+      y < box.bottom + OVERLAY_GAP;
+
+    if (isCovered) {
+      map.panBy([x - (box.right + OVERLAY_GAP), 0]);
+    }
+
+    return;
+  }
+
+  const top = topbar.getBoundingClientRect().bottom + OVERLAY_GAP;
+  const bottom =
+    Math.min(
+      sheet.getBoundingClientRect().top,
+      ...floating.map((element) => element.getBoundingClientRect().top)
+    ) - OVERLAY_GAP;
+
+  if (y > bottom) {
+    map.panBy([0, y - bottom]);
+  } else if (y < top) {
+    map.panBy([0, y - top]);
+  }
+}
 
 // Place names already looked up, keyed by the map centre rounded to about 1 km.
 const placeNameCache = new Map();
 
-// Leaflet also fires `click` for a tap that only closes a popup and for both
-// halves of a double-click zoom. Those should not open the add-bin form.
-function AddBinOnClick({ onAdd }) {
-  const pendingClickRef = useRef(null);
-  const popupJustClosedRef = useRef(false);
+// Leaflet fires `click` for both halves of a double-click zoom, so a tap waits
+// briefly to make sure it isn't the start of one.
+function MapTapHandler({ onTap }) {
+  const pendingTapRef = useRef(null);
 
-  useEffect(() => () => window.clearTimeout(pendingClickRef.current), []);
+  useEffect(() => () => window.clearTimeout(pendingTapRef.current), []);
 
-  function cancelPendingClick() {
-    window.clearTimeout(pendingClickRef.current);
-    pendingClickRef.current = null;
+  function cancelPendingTap() {
+    window.clearTimeout(pendingTapRef.current);
+    pendingTapRef.current = null;
   }
 
   useMapEvents({
-    popupclose() {
-      // A tap that closes a popup fires `popupclose` and then `click` in the
-      // same event dispatch, so the flag only needs to last until the next task.
-      popupJustClosedRef.current = true;
-      window.setTimeout(() => {
-        popupJustClosedRef.current = false;
-      }, 0);
-    },
     click(event) {
-      if (popupJustClosedRef.current) {
-        return;
-      }
-
-      if (pendingClickRef.current) {
+      if (pendingTapRef.current) {
         // Second click of a double-click: let Leaflet zoom instead.
-        cancelPendingClick();
+        cancelPendingTap();
         return;
       }
 
       // wrap() keeps longitude within -180..180 after panning past the date line.
       const latlng = event.latlng.wrap();
 
-      pendingClickRef.current = window.setTimeout(() => {
-        pendingClickRef.current = null;
-        onAdd(latlng);
+      pendingTapRef.current = window.setTimeout(() => {
+        pendingTapRef.current = null;
+        onTap(latlng);
       }, DOUBLE_CLICK_WINDOW_MS);
     },
-    dblclick: cancelPendingClick,
+    dblclick: cancelPendingTap,
   });
 
   return null;
 }
 
-// Leaflet only measures its container on window resize. Entering or leaving
-// full screen resizes the container without one, so watch it directly.
+// Leaflet only measures its container on window resize; this also catches
+// other changes to the container's size.
 function MapSizeWatcher() {
   const map = useMap();
 
@@ -345,13 +381,11 @@ async function fetchAllBins(signal) {
 }
 
 // Memoized so that moving the map or typing in a form doesn't re-render every
-// marker and popup. Callbacks passed in must be stable.
+// marker. Callbacks passed in must be stable.
 const BinMarker = memo(function BinMarker({
   bin,
-  distance,
-  isDeleting,
-  onEdit,
-  onDelete,
+  isSelected,
+  onSelect,
   registerMarker,
 }) {
   const position = useMemo(
@@ -362,6 +396,23 @@ const BinMarker = memo(function BinMarker({
     (marker) => registerMarker(bin.id, marker),
     [bin.id, registerMarker]
   );
+  const eventHandlers = useMemo(
+    () => ({
+      click: () => onSelect(bin.id),
+      // Leaflet makes markers focusable buttons but only opens them from the
+      // keyboard when they have a popup. These open the sheet instead, so
+      // handle Enter and Space here.
+      keypress(event) {
+        const { key } = event.originalEvent;
+
+        if (key === 'Enter' || key === ' ') {
+          event.originalEvent.preventDefault();
+          onSelect(bin.id);
+        }
+      },
+    }),
+    [bin.id, onSelect]
+  );
   const binType = getBinType(bin.bin_type);
   const title = bin.title || 'Waste bin';
 
@@ -369,63 +420,12 @@ const BinMarker = memo(function BinMarker({
     <Marker
       ref={markerRef}
       position={position}
-      icon={BIN_ICONS[binType]}
+      icon={BIN_ICONS[isSelected ? 'selected' : 'default'][binType]}
+      zIndexOffset={isSelected ? 500 : 0}
       // Leaflet gives markers role="button"; the title is their accessible name.
       title={`${title}, ${BIN_TYPE_LABELS[binType].toLowerCase()} bin`}
-    >
-      <Popup
-        autoPanPaddingTopLeft={POPUP_PAN_PADDING_TOP_LEFT}
-        autoPanPaddingBottomRight={POPUP_PAN_PADDING_BOTTOM_RIGHT}
-      >
-        <div className="popup-content">
-          <div className="popup-content__header">
-            <strong>{title}</strong>
-            <span className={`popup-bin-type popup-bin-type--${binType}`}>
-              {BIN_TYPE_LABELS[binType]}
-            </span>
-          </div>
-          <p className="popup-content__description">
-            {bin.description || 'No description added.'}
-          </p>
-          <div className="popup-content__meta">
-            {distance !== null && (
-              <span className="popup-content__distance">
-                {formatDistance(distance)} from you
-              </span>
-            )}
-            <span className="popup-content__label">Coordinates</span>
-            <small>
-              {bin.latitude.toFixed(5)}, {bin.longitude.toFixed(5)}
-            </small>
-          </div>
-          <a
-            className="button popup-button"
-            href={getDirectionsUrl(bin)}
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Directions
-          </a>
-          <div className="popup-actions">
-            <button
-              type="button"
-              className="button button-secondary"
-              onClick={() => onEdit(bin)}
-            >
-              Edit
-            </button>
-            <button
-              type="button"
-              className="button button-danger"
-              onClick={() => onDelete(bin.id)}
-              disabled={isDeleting}
-            >
-              {isDeleting ? 'Deleting...' : 'Delete'}
-            </button>
-          </div>
-        </div>
-      </Popup>
-    </Marker>
+      eventHandlers={eventHandlers}
+    />
   );
 });
 
@@ -435,7 +435,6 @@ function BinMap() {
   const [isSaving, setIsSaving] = useState(false);
   const [deletingBinId, setDeletingBinId] = useState(null);
   const [isLocating, setIsLocating] = useState(false);
-  const [isFullscreen, setIsFullscreen] = useState(false);
   const [isSubmittingFeedback, setIsSubmittingFeedback] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
@@ -443,9 +442,12 @@ function BinMap() {
   const [placeName, setPlaceName] = useState('Kochi, Kerala');
   // A bin being added, or being edited when it has an `id`.
   const [draftBin, setDraftBin] = useState(null);
+  // The bin whose details are open in the sheet.
+  const [selectedBinId, setSelectedBinId] = useState(null);
+  // The bin whose delete is waiting for a second, confirming tap.
+  const [confirmingDeleteId, setConfirmingDeleteId] = useState(null);
   const [userLocation, setUserLocation] = useState(null);
   const [isNearestBinDismissed, setIsNearestBinDismissed] = useState(false);
-  const [showScrollHint, setShowScrollHint] = useState(false);
   const [isFeedbackOpen, setIsFeedbackOpen] = useState(false);
   const [feedbackForm, setFeedbackForm] = useState({
     name: '',
@@ -455,19 +457,39 @@ function BinMap() {
   const [feedbackStatus, setFeedbackStatus] = useState(null);
 
   const mapRef = useRef(null);
-  const mapStageRef = useRef(null);
+  const appRef = useRef(null);
+  const panelRef = useRef(null);
+  const topbarRef = useRef(null);
+  const sheetRef = useRef(null);
+  const dockRef = useRef(null);
+  const legendRef = useRef(null);
+  const sheetHeadingRef = useRef(null);
   const binFormRef = useRef(null);
+  const confirmKeepRef = useRef(null);
+  const deleteButtonRef = useRef(null);
   const markerRefs = useRef(new Map());
   const deletingBinIdRef = useRef(null);
+  const isDraftOpenRef = useRef(false);
   const focusFormOnOpenRef = useRef(false);
+  const focusSheetOnSelectRef = useRef(false);
+  const focusMarkerOnCloseRef = useRef(null);
+  const focusDeleteOnCancelRef = useRef(false);
   const feedbackTriggerRef = useRef(null);
   const feedbackDialogRef = useRef(null);
   const feedbackCloseTimerRef = useRef(null);
 
   const isEditing = Boolean(draftBin?.id);
   const isDraftOpen = draftBin !== null;
+  isDraftOpenRef.current = isDraftOpen;
   // Which bin the form is for: changes when it opens, closes or switches bins.
   const draftKey = draftBin ? draftBin.id ?? 'new' : null;
+
+  const selectedBin = useMemo(
+    () => bins.find((bin) => bin.id === selectedBinId) ?? null,
+    [bins, selectedBinId]
+  );
+  const isConfirmingDelete =
+    selectedBin !== null && confirmingDeleteId === selectedBin.id;
 
   // A new array on every render would make react-leaflet move the draft marker
   // back to the stored position, even in the middle of a drag.
@@ -477,6 +499,16 @@ function BinMap() {
     () =>
       draftLatitude === undefined ? null : [draftLatitude, draftLongitude],
     [draftLatitude, draftLongitude]
+  );
+
+  const selectedLatitude = selectedBin?.latitude;
+  const selectedLongitude = selectedBin?.longitude;
+  const selectedPosition = useMemo(
+    () =>
+      selectedLatitude === undefined
+        ? null
+        : [selectedLatitude, selectedLongitude],
+    [selectedLatitude, selectedLongitude]
   );
 
   const draftMarkerHandlers = useMemo(
@@ -515,6 +547,24 @@ function BinMap() {
     return nearest;
   }, [userLocation, bins]);
 
+  // What the sheet shows, most important first.
+  let sheetMode = 'home';
+
+  if (draftBin) {
+    sheetMode = 'form';
+  } else if (selectedBin) {
+    sheetMode = 'bin';
+  } else if (userLocation && !isNearestBinDismissed && !isLoading) {
+    sheetMode = 'nearest';
+  }
+
+  const sheetKey =
+    sheetMode === 'form'
+      ? `form:${draftKey}`
+      : sheetMode === 'bin'
+        ? `bin:${selectedBin.id}`
+        : sheetMode;
+
   const registerMarker = useCallback((binId, marker) => {
     if (marker) {
       markerRefs.current.set(binId, marker);
@@ -523,53 +573,110 @@ function BinMap() {
     }
   }, []);
 
-  // The add/edit form floats over the bottom of the map and can hide the pin,
-  // especially on a phone. Pan the map so the pin sits just above the form.
+  // Stable, so the memoized markers don't re-render. It only uses refs and
+  // state setters.
+  const selectBin = useCallback((binId) => {
+    // While adding or editing, the form keeps the sheet.
+    if (isDraftOpenRef.current) {
+      return;
+    }
+
+    focusSheetOnSelectRef.current = true;
+    setConfirmingDeleteId(null);
+    setSelectedBinId(binId);
+  }, []);
+
+  // On a phone the sheet covers the bottom of the map. Publish its height so
+  // the map buttons and the map's attribution sit just above it. Measured
+  // after every render, before paint, so they never lag a frame behind (and
+  // the pan below sees their new place); the observer catches other changes,
+  // such as a resized text box.
+  useLayoutEffect(() => {
+    appRef.current?.style.setProperty(
+      '--sheet-height',
+      `${sheetRef.current?.offsetHeight ?? 0}px`
+    );
+  });
+
+  useEffect(() => {
+    const sheet = sheetRef.current;
+    const app = appRef.current;
+
+    if (!sheet || !app || typeof ResizeObserver === 'undefined') {
+      return undefined;
+    }
+
+    const observer = new ResizeObserver(() => {
+      app.style.setProperty('--sheet-height', `${sheet.offsetHeight}px`);
+    });
+    observer.observe(sheet);
+
+    return () => observer.disconnect();
+  }, []);
+
+  // Keep the pin being placed, or the selected bin, in view: pan the map if
+  // the floating UI is covering it.
+  const focusPosition = draftPosition ?? selectedPosition;
+
   useEffect(() => {
     const map = mapRef.current;
-    const form = binFormRef.current;
 
-    if (!draftPosition || !map || !form) {
+    if (!map || !focusPosition) {
       return;
     }
 
-    // Measure with the current size, even if the resize watcher hasn't run yet.
-    map.invalidateSize();
+    keepPointInView(map, focusPosition, {
+      isWideLayout: window.matchMedia?.(WIDE_LAYOUT_QUERY)?.matches,
+      panel: panelRef.current,
+      topbar: topbarRef.current,
+      sheet: sheetRef.current,
+      floating: [dockRef.current, legendRef.current].filter(Boolean),
+    });
+  }, [focusPosition, sheetKey]);
 
-    const mapRect = map.getContainer().getBoundingClientRect();
-    const formRect = form.getBoundingClientRect();
-    const pin = map.latLngToContainerPoint(draftPosition);
-    const pinX = mapRect.left + pin.x;
-    const pinBottom = mapRect.top + pin.y;
-    const gap = 24;
-
-    const isUnderForm =
-      pinX > formRect.left - gap &&
-      pinX < formRect.right + gap &&
-      pinBottom > formRect.top - gap;
-
-    if (isUnderForm) {
-      map.panBy([0, pinBottom - (formRect.top - gap)]);
-    }
-  }, [isFullscreen, draftPosition]);
-
-  // When the form opens, scroll the page just enough to show all of it (on a
-  // phone the map can run past the bottom of the screen). Keyboard users who
-  // opened it from a button also land in its first field.
+  // Keyboard users who opened the form from a button land in its first field.
+  // A tap on the map doesn't move focus, so phones don't pop up the keyboard.
   useEffect(() => {
-    const form = binFormRef.current;
-
-    if (!draftKey || !form) {
+    if (!draftKey || !focusFormOnOpenRef.current) {
       return;
     }
 
-    form.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    focusFormOnOpenRef.current = false;
+    const form = binFormRef.current;
+    const firstField =
+      form?.querySelector('input[name="binType"]:checked') ??
+      form?.querySelector('input, textarea');
 
-    if (focusFormOnOpenRef.current) {
-      focusFormOnOpenRef.current = false;
-      form.querySelector('select, input, textarea')?.focus({ preventScroll: true });
-    }
+    firstField?.focus({ preventScroll: true });
   }, [draftKey]);
+
+  // Opening a bin moves focus to its details; closing them puts focus back on
+  // its marker, so keyboard and screen reader users don't lose their place.
+  useEffect(() => {
+    if (selectedBinId && focusSheetOnSelectRef.current) {
+      focusSheetOnSelectRef.current = false;
+      sheetHeadingRef.current?.focus({ preventScroll: true });
+      return;
+    }
+
+    if (!selectedBinId && focusMarkerOnCloseRef.current) {
+      const marker = markerRefs.current.get(focusMarkerOnCloseRef.current);
+      focusMarkerOnCloseRef.current = null;
+      marker?.getElement()?.focus({ preventScroll: true });
+    }
+  }, [selectedBinId]);
+
+  useEffect(() => {
+    if (confirmingDeleteId) {
+      confirmKeepRef.current?.focus({ preventScroll: true });
+      return;
+    }
+
+    if (focusDeleteOnCancelRef.current) {
+      focusDeleteOnCancelRef.current = false;
+      deleteButtonRef.current?.focus({ preventScroll: true });
+    }
+  }, [confirmingDeleteId]);
 
   useEffect(() => {
     if (!successMessage) {
@@ -694,67 +801,6 @@ function BinMap() {
     };
   }, [mapCenter]);
 
-  // A layout effect, so the body class is in place before the browser paints.
-  // Without it, `backdrop-filter` on the map card would hold the fixed map
-  // inside the card for a frame (see `map-fullscreen-open` in index.css).
-  useLayoutEffect(() => {
-    if (!isFullscreen) {
-      return undefined;
-    }
-
-    const previousOverflow = document.body.style.overflow;
-    // The map leaves the page flow in full screen, so the page gets shorter
-    // and the browser may scroll up. Put the reader back where they were.
-    const previousScrollY = window.scrollY;
-    document.body.style.overflow = 'hidden';
-    document.body.classList.add('map-fullscreen-open');
-
-    return () => {
-      document.body.style.overflow = previousOverflow;
-      document.body.classList.remove('map-fullscreen-open');
-      window.scrollTo(0, previousScrollY);
-    };
-  }, [isFullscreen]);
-
-  // In the page view, a plain mouse wheel scrolls the page instead of zooming
-  // the map, so the map can't trap scrolling. Ctrl/⌘ + wheel and trackpad
-  // pinches (which browsers send as Ctrl + wheel) still reach Leaflet and zoom.
-  // Full screen has no page to scroll, so the wheel zooms there as usual.
-  useEffect(() => {
-    const stage = mapStageRef.current;
-
-    if (!stage || isFullscreen) {
-      return undefined;
-    }
-
-    let hideHintTimeout;
-
-    function handleWheel(event) {
-      if (event.ctrlKey || event.metaKey) {
-        return;
-      }
-
-      if (!event.target.closest('.leaflet-container')) {
-        return;
-      }
-
-      // Stopping it here, above the map, keeps it from Leaflet's own listener.
-      // The browser still scrolls the page, since nothing prevents the default.
-      event.stopPropagation();
-      setShowScrollHint(true);
-      window.clearTimeout(hideHintTimeout);
-      hideHintTimeout = window.setTimeout(() => setShowScrollHint(false), 1500);
-    }
-
-    stage.addEventListener('wheel', handleWheel, { capture: true, passive: true });
-
-    return () => {
-      stage.removeEventListener('wheel', handleWheel, { capture: true });
-      window.clearTimeout(hideHintTimeout);
-      setShowScrollHint(false);
-    };
-  }, [isFullscreen]);
-
   // Feedback dialog: move focus in when it opens, and clear the auto-close
   // timer if the component goes away.
   useEffect(() => {
@@ -778,6 +824,8 @@ function BinMap() {
     }
 
     setErrorMessage('');
+    setSelectedBinId(null);
+    setConfirmingDeleteId(null);
     // Tapping again while a draft is open moves the pin and keeps what was typed.
     setDraftBin((currentDraft) => ({
       binType: BIN_TYPE_PUBLIC,
@@ -787,6 +835,20 @@ function BinMap() {
       latitude: latlng.lat,
       longitude: latlng.lng,
     }));
+  }
+
+  // A tap on an empty part of the map. Like tapping outside a sheet in other
+  // map apps, it first closes whatever the sheet shows; otherwise it adds a bin.
+  function handleMapTap(latlng) {
+    if (draftBin) {
+      markNewBin(latlng);
+    } else if (selectedBin) {
+      closeSelectedBin({ restoreFocus: false });
+    } else if (sheetMode === 'nearest') {
+      setIsNearestBinDismissed(true);
+    } else {
+      markNewBin(latlng);
+    }
   }
 
   // The keyboard way to add a bin: pan the map (arrow keys work once it has
@@ -805,8 +867,23 @@ function BinMap() {
     markNewBin(map.getCenter().wrap());
   }
 
-  const startEditingBin = useCallback((bin) => {
-    mapRef.current?.closePopup();
+  function closeSelectedBin({ restoreFocus = true } = {}) {
+    if (restoreFocus) {
+      focusMarkerOnCloseRef.current = selectedBinId;
+    }
+
+    setSelectedBinId(null);
+    setConfirmingDeleteId(null);
+  }
+
+  function cancelDelete() {
+    focusDeleteOnCancelRef.current = true;
+    setConfirmingDeleteId(null);
+  }
+
+  function startEditingBin(bin) {
+    setSelectedBinId(null);
+    setConfirmingDeleteId(null);
     focusFormOnOpenRef.current = true;
     setErrorMessage('');
     setDraftBin({
@@ -817,7 +894,7 @@ function BinMap() {
       title: bin.title ?? '',
       description: bin.description ?? '',
     });
-  }, []);
+  }
 
   function handleDraftChange(event) {
     const { name, value } = event.target;
@@ -833,7 +910,32 @@ function BinMap() {
       return;
     }
 
+    // Cancelling an edit goes back to that bin's details.
+    if (draftBin?.id) {
+      focusSheetOnSelectRef.current = true;
+      setSelectedBinId(draftBin.id);
+    }
+
     setDraftBin(null);
+  }
+
+  // Escape closes whatever the sheet shows, one step at a time.
+  function handleSheetKeyDown(event) {
+    if (event.key !== 'Escape') {
+      return;
+    }
+
+    if (sheetMode === 'form') {
+      handleCancelDraft();
+    } else if (sheetMode === 'bin') {
+      if (isConfirmingDelete) {
+        cancelDelete();
+      } else {
+        closeSelectedBin();
+      }
+    } else if (sheetMode === 'nearest') {
+      setIsNearestBinDismissed(true);
+    }
   }
 
   function openFeedbackForm() {
@@ -889,6 +991,12 @@ function BinMap() {
       ...currentForm,
       [name]: value,
     }));
+  }
+
+  // After a save, the sheet shows the bin that was saved.
+  function showSavedBin(binId) {
+    focusSheetOnSelectRef.current = true;
+    setSelectedBinId(binId);
   }
 
   async function handleSaveDraftBin(event) {
@@ -954,6 +1062,7 @@ function BinMap() {
 
     setBins((currentBins) => [data, ...currentBins]);
     setDraftBin(null);
+    showSavedBin(data.id);
     setSuccessMessage('Bin added. Thanks for helping!');
     setIsSaving(false);
   }
@@ -992,12 +1101,11 @@ function BinMap() {
     setBins((currentBins) =>
       currentBins.map((bin) => (bin.id === updatedBin.id ? updatedBin : bin))
     );
+    showSavedBin(updatedBin.id);
     setSuccessMessage('Changes saved.');
   }
 
-  // Stable, so the memoized markers don't re-render. It only uses refs,
-  // state setters and module-level values.
-  const handleDeleteBin = useCallback(async (binId) => {
+  async function deleteBin(binId) {
     if (!isSupabaseConfigured) {
       setErrorMessage(
         'You need to configure Supabase before deleting bins from the map.'
@@ -1010,17 +1118,6 @@ function BinMap() {
       return;
     }
 
-    const shouldDelete = window.confirm(
-      'Are you sure you want to delete this waste bin?'
-    );
-
-    if (!shouldDelete) {
-      return;
-    }
-
-    // Close the popup first. In full screen an error banner would otherwise
-    // land on top of it, covering its close button.
-    mapRef.current?.closePopup();
     deletingBinIdRef.current = binId;
     setDeletingBinId(binId);
     setErrorMessage('');
@@ -1033,12 +1130,14 @@ function BinMap() {
 
     deletingBinIdRef.current = null;
     setDeletingBinId(null);
+    setConfirmingDeleteId(null);
 
     if (error) {
       setErrorMessage(getDeleteErrorMessage(error));
       return;
     }
 
+    setSelectedBinId((currentId) => (currentId === binId ? null : currentId));
     setBins((currentBins) => currentBins.filter((bin) => bin.id !== binId));
 
     if (wasDeleted) {
@@ -1046,7 +1145,7 @@ function BinMap() {
     } else {
       setErrorMessage('This bin had already been removed.');
     }
-  }, []);
+  }
 
   async function handleFeedbackSubmit(event) {
     event.preventDefault();
@@ -1119,6 +1218,8 @@ function BinMap() {
 
         setUserLocation(nextLocation);
         setMapCenter(nextLocation);
+        setSelectedBinId(null);
+        setConfirmingDeleteId(null);
         setIsNearestBinDismissed(false);
         setIsLocating(false);
       },
@@ -1143,7 +1244,7 @@ function BinMap() {
     );
   }
 
-  // Fly to a bin and open its popup.
+  // Fly to a bin, then open its details.
   function showBinOnMap(binId) {
     const map = mapRef.current;
     const marker = markerRefs.current.get(binId);
@@ -1152,414 +1253,588 @@ function BinMap() {
       return;
     }
 
-    // The popup shows the same details and directions, and the card would
-    // otherwise sit on top of it.
     setIsNearestBinDismissed(true);
-    map.once('moveend', () => marker.openPopup());
+    // Selecting only after the flight, so the sheet's pan can't cut it short.
+    map.once('moveend', () => selectBin(binId));
     map.flyTo(marker.getLatLng(), Math.max(map.getZoom(), STREET_ZOOM), {
       duration: 0.8,
     });
   }
 
-  function toggleFullscreen() {
-    setIsFullscreen((currentValue) => !currentValue);
-  }
-
   const statusLabels = [
-    isLoading && 'Loading bins...',
-    isSaving && (isEditing ? 'Saving changes...' : 'Saving new bin...'),
-    deletingBinId && 'Deleting bin...',
-    isLocating && 'Finding your location...',
+    isLoading && 'Loading bins…',
+    isSaving && (isEditing ? 'Saving changes…' : 'Saving new bin…'),
+    deletingBinId && 'Deleting bin…',
+    isLocating && 'Finding your location…',
   ].filter(Boolean);
 
-  const placePinLabel = isDraftOpen
-    ? 'Move the pin to the map centre'
-    : 'Add a bin at the map centre';
+  const sheetLabels = {
+    home: 'Find a bin',
+    nearest: 'Nearest bin',
+    bin: 'Bin details',
+    form: isEditing ? 'Edit bin' : 'Add a bin',
+  };
 
-  return (
-    <div className={`map-wrapper${isFullscreen ? ' map-wrapper--fullscreen' : ''}`}>
-      <div className="toolbar">
-        <h2>Current Area: {placeName}</h2>
-        <p>Tap the map to add a waste bin. No paperwork required.</p>
-      </div>
+  function renderHomeSheet() {
+    return (
+      <>
+        <div className="sheet__intro">
+          <h2 className="sheet__title" ref={sheetHeadingRef} tabIndex={-1}>
+            Find the nearest bin
+          </h2>
+          <p className="sheet__text">
+            Tap the map to add one. No paperwork required.
+          </p>
+        </div>
+        <button
+          type="button"
+          className="button button--primary button--block"
+          onClick={handleLocateMe}
+          disabled={isLocating}
+        >
+          <LocateIcon size={18} />
+          {isLocating ? 'Finding you…' : 'Find nearest bin'}
+        </button>
+      </>
+    );
+  }
 
-      {/* The map is rendered in exactly one place. Full screen is only a CSS
-          class, so toggling it keeps the same Leaflet map and its view. */}
-      <div className="map-stage" ref={mapStageRef}>
-        {/* Messages float over the top of the map, so they never push it down. */}
-        <div className="map-notices">
-          {errorMessage && (
-            <div className="notice notice--error" role="alert">
-              <p>{errorMessage}</p>
-              <button
-                type="button"
-                className="notice__close"
-                onClick={() => setErrorMessage('')}
-                aria-label="Dismiss message"
-              >
-                ×
-              </button>
-            </div>
-          )}
-
-          {successMessage && (
-            <div className="notice notice--success" role="status">
-              <p>{successMessage}</p>
-              <button
-                type="button"
-                className="notice__close"
-                onClick={() => setSuccessMessage('')}
-                aria-label="Dismiss message"
-              >
-                ×
-              </button>
-            </div>
-          )}
-
-          {userLocation && !isNearestBinDismissed && !isLoading && (
-            <div className="notice notice--nearest">
-              {nearestBin ? (
-                <div className="notice__body">
-                  <span className="notice__eyebrow">
-                    Nearest bin · {formatDistance(nearestBin.distance)}
-                  </span>
-                  <strong>{nearestBin.bin.title || 'Waste bin'}</strong>
-                  <div className="notice__actions">
-                    <button
-                      type="button"
-                      className="notice__action"
-                      onClick={() => showBinOnMap(nearestBin.bin.id)}
-                    >
-                      Show on map
-                    </button>
-                    <a
-                      className="notice__action"
-                      href={getDirectionsUrl(nearestBin.bin)}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      Directions
-                    </a>
-                  </div>
-                </div>
-              ) : (
-                <p>No bins on the map yet. Tap the map to add the first one.</p>
-              )}
-              <button
-                type="button"
-                className="notice__close"
-                onClick={() => setIsNearestBinDismissed(true)}
-                aria-label="Hide nearest bin"
-              >
-                ×
-              </button>
-            </div>
-          )}
-
-          <div className="status-group" role="status">
-            {statusLabels.map((label) => (
-              <span key={label} className="status">
-                {label}
-              </span>
-            ))}
+  function renderNearestSheet() {
+    return (
+      <>
+        <div className="sheet__header">
+          <div className="sheet__heading">
+            {nearestBin && (
+              <p className="sheet__eyebrow">
+                Nearest bin · {formatDistance(nearestBin.distance)}
+              </p>
+            )}
+            <h2 className="sheet__title" ref={sheetHeadingRef} tabIndex={-1}>
+              {nearestBin
+                ? nearestBin.bin.title || 'Waste bin'
+                : 'No bins on the map yet'}
+            </h2>
           </div>
+          <button
+            type="button"
+            className="icon-button icon-button--round"
+            onClick={() => setIsNearestBinDismissed(true)}
+            aria-label="Hide nearest bin"
+          >
+            <CloseIcon size={18} />
+          </button>
         </div>
 
-        <MapContainer
-          ref={mapRef}
-          center={DEFAULT_CENTER}
-          zoom={DEFAULT_ZOOM}
-          scrollWheelZoom
-          className="leaflet-map"
-        >
-          <TileLayer
-            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          />
-
-          <AddBinOnClick onAdd={markNewBin} />
-          <MapCenterTracker onCenterChange={setMapCenter} />
-          <MapController targetLocation={userLocation} />
-          <MapSizeWatcher />
-
-          {draftPosition && (
-            <Marker
-              position={draftPosition}
-              icon={DRAFT_BIN_ICONS[getBinType(draftBin.binType)]}
-              draggable
-              zIndexOffset={1000}
-              title="New bin location. Drag to adjust, or tap elsewhere on the map to move it."
-              alt="New bin location"
-              eventHandlers={draftMarkerHandlers}
-            />
-          )}
-
-          {userLocation && (
-            <Marker
-              position={[userLocation.lat, userLocation.lng]}
-              icon={userLocationIcon}
-              title="Your location"
+        {nearestBin ? (
+          <div className="sheet__actions">
+            <a
+              className="button button--primary sheet__grow"
+              href={getDirectionsUrl(nearestBin.bin)}
+              target="_blank"
+              rel="noopener noreferrer"
             >
-              <Popup>
-                <div className="popup-content">
-                  <strong>Your location</strong>
-                  <p>This location comes from your device GPS.</p>
-                  <small>
-                    {userLocation.lat.toFixed(5)}, {userLocation.lng.toFixed(5)}
-                  </small>
-                </div>
-              </Popup>
-            </Marker>
+              <DirectionsIcon size={18} />
+              Directions
+            </a>
+            <button
+              type="button"
+              className="button button--secondary sheet__grow"
+              onClick={() => showBinOnMap(nearestBin.bin.id)}
+            >
+              Show on map
+            </button>
+          </div>
+        ) : (
+          <p className="sheet__text">Tap the map to add the first one.</p>
+        )}
+      </>
+    );
+  }
+
+  function renderBinSheet(bin) {
+    const binType = getBinType(bin.bin_type);
+    const distance = userLocation
+      ? getDistanceInMeters(userLocation, { lat: bin.latitude, lng: bin.longitude })
+      : null;
+    const isDeleting = deletingBinId === bin.id;
+
+    return (
+      <>
+        <div className="sheet__header">
+          <h2 className="sheet__title" ref={sheetHeadingRef} tabIndex={-1}>
+            {bin.title || 'Waste bin'}
+          </h2>
+          <button
+            type="button"
+            className="icon-button icon-button--round"
+            onClick={() => closeSelectedBin()}
+            aria-label="Close bin details"
+          >
+            <CloseIcon size={18} />
+          </button>
+        </div>
+
+        <div className="sheet__meta">
+          <span className={`chip chip--${binType}`}>
+            {BIN_TYPE_LABELS[binType]}
+          </span>
+          {distance !== null && (
+            <span className="sheet__distance">{formatDistance(distance)} away</span>
           )}
+        </div>
 
-          {bins.map((bin) =>
-            // While a bin is being edited, its draft pin stands in for it.
-            bin.id === draftBin?.id ? null : (
-              <BinMarker
-                key={bin.id}
-                bin={bin}
-                distance={
-                  userLocation
-                    ? getDistanceInMeters(userLocation, {
-                        lat: bin.latitude,
-                        lng: bin.longitude,
-                      })
-                    : null
-                }
-                isDeleting={deletingBinId === bin.id}
-                onEdit={startEditingBin}
-                onDelete={handleDeleteBin}
-                registerMarker={registerMarker}
-              />
-            )
-          )}
-        </MapContainer>
+        <p className={`sheet__text${bin.description ? '' : ' sheet__text--muted'}`}>
+          {bin.description || 'No description added.'}
+        </p>
 
-        <ul className="map-legend" aria-label="Map key">
-          <li>
-            <span className="map-legend__dot map-legend__dot--public" aria-hidden="true"></span>
-            Public bin
-          </li>
-          <li>
-            <span className="map-legend__dot map-legend__dot--private" aria-hidden="true"></span>
-            Private bin
-          </li>
-        </ul>
-
-        {showScrollHint && (
-          <div className="map-scroll-hint" aria-hidden="true">
-            Use {IS_APPLE_DEVICE ? '⌘' : 'Ctrl'} + scroll to zoom the map
+        {isConfirmingDelete ? (
+          <div className="sheet__confirm" role="group" aria-labelledby="delete-confirm-text">
+            <p id="delete-confirm-text" className="sheet__confirm-text">
+              Delete this bin from the map?
+            </p>
+            <div className="sheet__actions">
+              <button
+                type="button"
+                ref={confirmKeepRef}
+                className="button button--secondary sheet__grow"
+                onClick={cancelDelete}
+                disabled={isDeleting}
+              >
+                Keep it
+              </button>
+              <button
+                type="button"
+                className="button button--danger sheet__grow"
+                onClick={() => deleteBin(bin.id)}
+                disabled={isDeleting}
+              >
+                {isDeleting ? 'Deleting…' : 'Delete'}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="sheet__actions">
+            <a
+              className="button button--primary sheet__grow"
+              href={getDirectionsUrl(bin)}
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              <DirectionsIcon size={18} />
+              Directions
+            </a>
+            <button
+              type="button"
+              className="icon-button icon-button--tile"
+              onClick={() => startEditingBin(bin)}
+              aria-label="Edit bin"
+              title="Edit bin"
+            >
+              <PencilIcon />
+            </button>
+            <button
+              type="button"
+              ref={deleteButtonRef}
+              className="icon-button icon-button--tile icon-button--danger"
+              onClick={() => setConfirmingDeleteId(bin.id)}
+              aria-label="Delete bin"
+              title="Delete bin"
+            >
+              <TrashIcon />
+            </button>
           </div>
         )}
 
-        <button
-          type="button"
-          className="map-control-button place-pin-button"
-          onClick={placePinAtMapCenter}
-          aria-label={placePinLabel}
-          title={placePinLabel}
-        >
-          <span className="place-pin-button__icon" aria-hidden="true"></span>
-        </button>
+        <p className="sheet__coords">
+          {bin.latitude.toFixed(5)}, {bin.longitude.toFixed(5)}
+        </p>
+      </>
+    );
+  }
 
-        <button
-          type="button"
-          className="map-control-button maximize-button"
-          onClick={toggleFullscreen}
-          aria-label={isFullscreen ? 'Exit full screen map' : 'Maximize map'}
-          title={isFullscreen ? 'Exit full screen map' : 'Maximize map'}
-        >
-          <span className="maximize-button__icon" aria-hidden="true"></span>
-        </button>
+  function renderFormSheet() {
+    return (
+      <form
+        ref={binFormRef}
+        className="bin-form"
+        onSubmit={handleSaveDraftBin}
+        aria-labelledby="bin-form-title"
+      >
+        <div className="sheet__heading">
+          <h2 id="bin-form-title" className="sheet__title">
+            {isEditing ? 'Edit bin' : 'Add a bin'}
+          </h2>
+          <p className="sheet__hint">Drag the pin or tap the map to move it.</p>
+        </div>
 
-        <button
-          type="button"
-          className="map-control-button locate-button"
-          onClick={handleLocateMe}
-          disabled={isLocating}
-          aria-label={isLocating ? 'Locating your position' : 'Find me and my nearest bin'}
-          title={isLocating ? 'Locating your position' : 'Find me and my nearest bin'}
-        >
-          <span className="locate-button__icon" aria-hidden="true">
-            <span className="locate-button__dot"></span>
-          </span>
-        </button>
+        <fieldset className="segmented">
+          <legend className="field__label">Type</legend>
+          <div className="segmented__options">
+            {BIN_TYPES.map((type) => (
+              <label key={type} className="segmented__option">
+                <input
+                  type="radio"
+                  name="binType"
+                  value={type}
+                  checked={draftBin.binType === type}
+                  onChange={handleDraftChange}
+                />
+                <span className="segmented__label">
+                  <span className={`dot dot--${type}`} aria-hidden="true"></span>
+                  {BIN_TYPE_LABELS[type]}
+                </span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
 
-        <button
-          type="button"
-          ref={feedbackTriggerRef}
-          className="feedback-trigger"
-          onClick={openFeedbackForm}
-        >
-          Suggestion & Feedback
-        </button>
+        <label className="field">
+          <span className="field__label">Title</span>
+          <input
+            type="text"
+            name="title"
+            value={draftBin.title}
+            onChange={handleDraftChange}
+            maxLength={MAX_TITLE_LENGTH}
+            placeholder="Example: Near the bus stop"
+          />
+        </label>
 
-        {draftBin && (
-          // A bottom sheet over the map, in both page and full-screen view, so
-          // opening it never pushes the map out of sight.
-          <form
-            ref={binFormRef}
-            className="bin-form"
-            onSubmit={handleSaveDraftBin}
-            onKeyDown={(event) => {
-              if (event.key === 'Escape') {
-                handleCancelDraft();
-              }
-            }}
-            aria-labelledby="bin-form-title"
+        <label className="field">
+          <span className="field__label">Description</span>
+          <textarea
+            name="description"
+            value={draftBin.description}
+            onChange={handleDraftChange}
+            maxLength={MAX_DESCRIPTION_LENGTH}
+            rows="2"
+            placeholder="Anything that helps people find it"
+          />
+        </label>
+
+        <div className="form-actions">
+          <button
+            type="button"
+            className="button button--secondary"
+            onClick={handleCancelDraft}
+            disabled={isSaving}
           >
-            <div className="bin-form-header">
-              <h3 id="bin-form-title">{isEditing ? 'Edit Bin' : 'Add New Bin'}</h3>
-              <p>
-                {draftBin.latitude.toFixed(5)}, {draftBin.longitude.toFixed(5)} ·
-                Drag the pin or tap the map to move it.
-              </p>
+            Cancel
+          </button>
+          <button type="submit" className="button button--primary" disabled={isSaving}>
+            {isSaving ? 'Saving…' : isEditing ? 'Save changes' : 'Save bin'}
+          </button>
+        </div>
+      </form>
+    );
+  }
+
+  function renderSheetContent() {
+    switch (sheetMode) {
+      case 'form':
+        return renderFormSheet();
+      case 'bin':
+        return renderBinSheet(selectedBin);
+      case 'nearest':
+        return renderNearestSheet();
+      default:
+        return renderHomeSheet();
+    }
+  }
+
+  const placePinLabel = isDraftOpen
+    ? 'Move pin to the map centre'
+    : 'Add bin at the map centre';
+
+  return (
+    <div className="map-app" ref={appRef}>
+      <MapContainer
+        ref={mapRef}
+        center={DEFAULT_CENTER}
+        zoom={DEFAULT_ZOOM}
+        zoomControl={false}
+        className="map-app__map"
+      >
+        <TileLayer
+          attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+          url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+        />
+
+        <MapTapHandler onTap={handleMapTap} />
+        <MapCenterTracker onCenterChange={setMapCenter} />
+        <MapController targetLocation={userLocation} />
+        <MapSizeWatcher />
+
+        {draftPosition && (
+          <Marker
+            position={draftPosition}
+            icon={BIN_ICONS.draft[getBinType(draftBin.binType)]}
+            draggable
+            zIndexOffset={1000}
+            title="New bin location. Drag to adjust, or tap elsewhere on the map to move it."
+            alt="New bin location"
+            eventHandlers={draftMarkerHandlers}
+          />
+        )}
+
+        {userLocation && (
+          <Marker
+            position={[userLocation.lat, userLocation.lng]}
+            icon={userLocationIcon}
+            title="Your location"
+            keyboard={false}
+            interactive={false}
+          />
+        )}
+
+        {bins.map((bin) =>
+          // While a bin is being edited, its draft pin stands in for it.
+          bin.id === draftBin?.id ? null : (
+            <BinMarker
+              key={bin.id}
+              bin={bin}
+              isSelected={bin.id === selectedBinId}
+              onSelect={selectBin}
+              registerMarker={registerMarker}
+            />
+          )
+        )}
+      </MapContainer>
+
+      {/* Everything that floats over the map. On a phone the top bar is at the
+          top and the sheet along the bottom; on wide screens both stack in a
+          panel on the left. */}
+      <div className="map-ui">
+        <div className="map-panel" ref={panelRef}>
+          <header className="topbar" ref={topbarRef}>
+            <span className="topbar__logo" aria-hidden="true">
+              <BinIcon size={18} strokeWidth={2.25} />
+            </span>
+            <div className="topbar__text">
+              <h1 className="topbar__title">Bin there</h1>
+              <p className="topbar__place">{placeName}</p>
+            </div>
+            <div className="topbar__actions">
+              <InstallButton />
+              <button
+                type="button"
+                ref={feedbackTriggerRef}
+                className="icon-button"
+                onClick={openFeedbackForm}
+                aria-label="Send feedback"
+                title="Send feedback"
+              >
+                <MessageIcon />
+              </button>
+            </div>
+          </header>
+
+          <div className="notices">
+            {errorMessage && (
+              <div className="notice notice--error" role="alert">
+                <p>{errorMessage}</p>
+                <button
+                  type="button"
+                  className="notice__close"
+                  onClick={() => setErrorMessage('')}
+                  aria-label="Dismiss message"
+                >
+                  <CloseIcon size={16} />
+                </button>
+              </div>
+            )}
+
+            {successMessage && (
+              <div className="notice notice--success" role="status">
+                <p>{successMessage}</p>
+                <button
+                  type="button"
+                  className="notice__close"
+                  onClick={() => setSuccessMessage('')}
+                  aria-label="Dismiss message"
+                >
+                  <CloseIcon size={16} />
+                </button>
+              </div>
+            )}
+
+            <div className="status-group" role="status">
+              {statusLabels.map((label) => (
+                <span key={label} className="status">
+                  {label}
+                </span>
+              ))}
+            </div>
+          </div>
+
+          <section
+            className="sheet"
+            ref={sheetRef}
+            aria-label={sheetLabels[sheetMode]}
+            onKeyDown={handleSheetKeyDown}
+          >
+            {/* Keyed, so each new view fades in. */}
+            <div className="sheet__content" key={sheetKey}>
+              {renderSheetContent()}
+            </div>
+          </section>
+        </div>
+
+        <div className="map-zoom" role="group" aria-label="Zoom">
+          <button
+            type="button"
+            className="map-zoom__button"
+            onClick={() => mapRef.current?.zoomIn()}
+            aria-label="Zoom in"
+            title="Zoom in"
+          >
+            <PlusIcon size={18} />
+          </button>
+          <button
+            type="button"
+            className="map-zoom__button"
+            onClick={() => mapRef.current?.zoomOut()}
+            aria-label="Zoom out"
+            title="Zoom out"
+          >
+            <MinusIcon size={18} />
+          </button>
+        </div>
+
+        <ul className="map-legend" aria-label="Map key" ref={legendRef}>
+          <li>
+            <span className="dot dot--public" aria-hidden="true"></span>
+            Public
+          </li>
+          <li>
+            <span className="dot dot--private" aria-hidden="true"></span>
+            Private
+          </li>
+        </ul>
+
+        <div className="map-dock" ref={dockRef}>
+          <button
+            type="button"
+            className="map-button"
+            onClick={handleLocateMe}
+            disabled={isLocating}
+            aria-label={isLocating ? 'Locating your position' : 'Find me and my nearest bin'}
+            title={isLocating ? 'Locating your position' : 'Find me and my nearest bin'}
+          >
+            <LocateIcon size={22} />
+          </button>
+          <button
+            type="button"
+            className="button button--primary add-bin-button"
+            onClick={placePinAtMapCenter}
+            aria-label={placePinLabel}
+            title={placePinLabel}
+          >
+            <PlusIcon size={18} strokeWidth={2.25} />
+            <span className="add-bin-button__label">
+              {isDraftOpen ? 'Move pin' : 'Add bin'}
+            </span>
+          </button>
+        </div>
+      </div>
+
+      {isFeedbackOpen && (
+        // The backdrop catches clicks so they can't reach the map below and
+        // open the add-bin form; clicking it closes the dialog instead.
+        <div
+          className="modal"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) {
+              closeFeedbackForm();
+            }
+          }}
+          onKeyDown={handleFeedbackKeyDown}
+        >
+          <form
+            ref={feedbackDialogRef}
+            className="modal__dialog"
+            onSubmit={handleFeedbackSubmit}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="feedback-form-title"
+          >
+            <div className="sheet__header">
+              <div className="sheet__heading">
+                <h2 id="feedback-form-title" className="sheet__title">
+                  Send feedback
+                </h2>
+                <p className="sheet__hint">
+                  Share a suggestion, bug or idea for the app.
+                </p>
+              </div>
+              <button
+                type="button"
+                className="icon-button icon-button--round"
+                onClick={closeFeedbackForm}
+                disabled={isSubmittingFeedback}
+                aria-label="Close feedback form"
+              >
+                <CloseIcon size={18} />
+              </button>
             </div>
 
             <label className="field">
-              <span>Bin Type</span>
-              <select
-                name="binType"
-                value={draftBin.binType}
-                onChange={handleDraftChange}
-              >
-                <option value={BIN_TYPE_PUBLIC}>Public</option>
-                <option value={BIN_TYPE_PRIVATE}>Private</option>
-              </select>
-            </label>
-
-            <label className="field">
-              <span>Title</span>
+              <span className="field__label">
+                Name <span className="field__optional">(optional)</span>
+              </span>
               <input
                 type="text"
-                name="title"
-                value={draftBin.title}
-                onChange={handleDraftChange}
-                maxLength={MAX_TITLE_LENGTH}
-                placeholder="Example: Near bus stop"
+                name="name"
+                value={feedbackForm.name}
+                onChange={handleFeedbackChange}
+                maxLength={MAX_FEEDBACK_NAME_LENGTH}
+                placeholder="Your name"
+                autoComplete="name"
               />
             </label>
 
             <label className="field">
-              <span>Description</span>
+              <span className="field__label">Feedback</span>
               <textarea
-                name="description"
-                value={draftBin.description}
-                onChange={handleDraftChange}
-                maxLength={MAX_DESCRIPTION_LENGTH}
-                rows="2"
-                placeholder="Add any details that help identify this bin"
+                name="feedback"
+                value={feedbackForm.feedback}
+                onChange={handleFeedbackChange}
+                maxLength={MAX_FEEDBACK_LENGTH}
+                rows="4"
+                placeholder="What would make the app better?"
+                required
               />
             </label>
+
+            {feedbackStatus && (
+              <p
+                className={`form-status form-status--${feedbackStatus.tone}`}
+                role={feedbackStatus.tone === 'error' ? 'alert' : 'status'}
+              >
+                {feedbackStatus.text}
+              </p>
+            )}
 
             <div className="form-actions">
               <button
                 type="button"
-                className="button button-secondary"
-                onClick={handleCancelDraft}
-                disabled={isSaving}
+                className="button button--secondary"
+                onClick={closeFeedbackForm}
+                disabled={isSubmittingFeedback}
               >
                 Cancel
               </button>
-              <button type="submit" className="button" disabled={isSaving}>
-                {isSaving ? 'Saving...' : isEditing ? 'Save Changes' : 'Save Bin'}
+              <button
+                type="submit"
+                className="button button--primary"
+                disabled={isSubmittingFeedback}
+              >
+                {isSubmittingFeedback ? 'Sending…' : 'Send'}
               </button>
             </div>
           </form>
-        )}
-
-        {isFeedbackOpen && (
-          // The backdrop catches clicks so they can't reach the map below and
-          // open the add-bin form; clicking it closes the dialog instead.
-          <div
-            className="feedback-modal"
-            onClick={(event) => {
-              if (event.target === event.currentTarget) {
-                closeFeedbackForm();
-              }
-            }}
-            onKeyDown={handleFeedbackKeyDown}
-          >
-            <form
-              ref={feedbackDialogRef}
-              className="feedback-form"
-              onSubmit={handleFeedbackSubmit}
-              role="dialog"
-              aria-modal="true"
-              aria-labelledby="feedback-form-title"
-            >
-              <div className="feedback-form__header">
-                <h3 id="feedback-form-title">App Feedback</h3>
-                <button
-                  type="button"
-                  className="feedback-form__close"
-                  onClick={closeFeedbackForm}
-                  disabled={isSubmittingFeedback}
-                  aria-label="Close feedback form"
-                >
-                  ×
-                </button>
-              </div>
-
-              <p className="feedback-form__copy">
-                Share a suggestion, bug, or idea for improving the app.
-              </p>
-
-              <label className="field">
-                <span>Name</span>
-                <input
-                  type="text"
-                  name="name"
-                  value={feedbackForm.name}
-                  onChange={handleFeedbackChange}
-                  maxLength={MAX_FEEDBACK_NAME_LENGTH}
-                  placeholder="Your name"
-                />
-              </label>
-
-              <label className="field">
-                <span>Feedback</span>
-                <textarea
-                  name="feedback"
-                  value={feedbackForm.feedback}
-                  onChange={handleFeedbackChange}
-                  maxLength={MAX_FEEDBACK_LENGTH}
-                  rows="4"
-                  placeholder="Tell us what would make the app better"
-                  required
-                />
-              </label>
-
-              {feedbackStatus && (
-                <p
-                  className={`feedback-form__status feedback-form__status--${feedbackStatus.tone}`}
-                  role={feedbackStatus.tone === 'error' ? 'alert' : 'status'}
-                >
-                  {feedbackStatus.text}
-                </p>
-              )}
-
-              <div className="form-actions">
-                <button
-                  type="button"
-                  className="button button-secondary"
-                  onClick={closeFeedbackForm}
-                  disabled={isSubmittingFeedback}
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="button"
-                  disabled={isSubmittingFeedback}
-                >
-                  {isSubmittingFeedback ? 'Sending...' : 'Send Feedback'}
-                </button>
-              </div>
-            </form>
-          </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -21,7 +21,7 @@ Vercel itself works fine. It moves only because Cloudflare can serve the site an
 
 ---
 
-## 2. Current state (verified in code on 2026-11-20)
+## 2. Current state (verified in code on 2026-11-24)
 
 **Frontend:** React 18 + Vite 5.4 single-page app, Leaflet/OpenStreetMap, Nominatim reverse geocoding, and a PWA (`public/manifest.webmanifest`, `public/sw.js`). It has no router and is served from `/`.
 
@@ -43,7 +43,7 @@ Check constraints limit `bin_type` to `public`/`private`, coordinates to valid r
 | Load all bins | `loadBins` → `fetchAllBins` | `from('bins').select('*', { count: 'exact' }).order(...).range(...)` in 1,000-row pages, because Supabase caps each response at 1,000 rows |
 | Add a bin | `handleSaveDraftBin` | `insert(payload).select().single()`, plus a "legacy insert" fallback for old schemas |
 | Edit a bin | `saveBinChanges` | `rpc('update_bin', { bin_id, new_latitude, new_longitude, new_bin_type, new_title, new_description })`, which returns the updated row, or no row if the bin was already gone |
-| Delete a bin | `handleDeleteBin` | `rpc('delete_bin', { bin_id })`, which returns `false` if the bin was already gone |
+| Delete a bin | `deleteBin` | `rpc('delete_bin', { bin_id })`, which returns `false` if the bin was already gone |
 | Send feedback | `handleFeedbackSubmit` | `from('app_feedback').insert({ name, feedback })` |
 
 The app does not use Supabase auth, storage or realtime. Its two RPCs are `delete_bin` and `update_bin`.
@@ -471,16 +471,16 @@ export default {
    export const sendFeedback = (entry) => request('/api/feedback', { method: 'POST', body: entry });
    ```
 2. Edit `src/components/BinMap.jsx`:
-   - **Imports:** import `{ listBins, createBin, updateBin, deleteBin, sendFeedback }` from `../lib/api` instead of Supabase.
+   - **Imports:** `import * as api from '../lib/api';` instead of Supabase, and call `api.listBins()` and so on. A plain named import would clash, because `BinMap.jsx` already has its own `deleteBin` function.
    - **Error helpers:** delete `getMissingFunctionMessage`, `getSupabaseErrorMessage`, `getMissingBinColumn`, `getDeleteErrorMessage`, `getEditErrorMessage` and `getFeedbackErrorMessage`. Use `error.message` (already user-friendly) with the existing fallback text.
    - **`buildBinPayload`:** simplify it (the `includeBinType` / `includeOptionalFields` options only existed for the legacy fallback).
-   - **Remove the `isSupabaseConfigured` guards** in `loadBins`, `markNewBin`, `handleDeleteBin` and `handleFeedbackSubmit`. With a same-origin API there's no config to miss.
-   - **`loadBins`:** `const { data, error } = await listBins();` and delete `fetchAllBins`; the Worker returns every row in one response.
-   - **`handleSaveDraftBin`:** `const { data, error } = await createBin(buildBinPayload(draftBin));` and drop the legacy-insert block.
-   - **`saveBinChanges`:** `const { data, error } = await updateBin(draft.id, { latitude, longitude, bin_type, title, description });` (add `updateBin` to `src/lib/api.js` as a `PATCH`). Treat `error.status === 404` the way an empty result is handled now.
-   - **`handleDeleteBin`:** replace the `supabase.rpc('delete_bin', ...)` call with `const { error } = await deleteBin(binId);`. Treat `error.status === 404` the way `wasDeleted === false` is handled now: remove the bin from the list and show "This bin had already been removed."
-   - **`handleFeedbackSubmit`:** `await sendFeedback({ name: ..., feedback: ... })`.
-   - **Rendering (the `bins.map(...)` markers and popups) stays the same**, because the field names (`id`, `latitude`, `longitude`, `bin_type`, `title`, `description`) are unchanged.
+   - **Remove the `isSupabaseConfigured` guards** in `loadBins`, `markNewBin`, `deleteBin` and `handleFeedbackSubmit`. With a same-origin API there's no config to miss.
+   - **`loadBins`:** `const { data, error } = await api.listBins();` and delete `fetchAllBins`; the Worker returns every row in one response.
+   - **`handleSaveDraftBin`:** `const { data, error } = await api.createBin(buildBinPayload(draftBin));` and drop the legacy-insert block.
+   - **`saveBinChanges`:** `const { data, error } = await api.updateBin(draft.id, { latitude, longitude, bin_type, title, description });` (add `updateBin` to `src/lib/api.js` as a `PATCH`). Treat `error.status === 404` the way an empty result is handled now.
+   - **`deleteBin`:** replace the `supabase.rpc('delete_bin', ...)` call with `const { error } = await api.deleteBin(binId);`. Treat `error.status === 404` the way `wasDeleted === false` is handled now: remove the bin from the list and show "This bin had already been removed."
+   - **`handleFeedbackSubmit`:** `await api.sendFeedback({ name: ..., feedback: ... })`.
+   - **Rendering (the `BinMarker` markers and the bin sheet) stays the same**, because the field names (`id`, `latitude`, `longitude`, `bin_type`, `title`, `description`) are unchanged.
 3. Remove Supabase from the frontend: delete `src/lib/supabase.js`, run `npm uninstall @supabase/supabase-js`, and remove both vars from `.env.example` (delete the file if nothing is left).
 4. Keep `supabase/schema.sql` until Phase 9 as a record of the old setup.
 
@@ -617,10 +617,11 @@ Run it locally (`npm run dev`, then `npx vite preview`) and again on the deploye
 - [ ] Map loads and every existing bin appears with the right color for public/private.
 - [ ] Clicking the map opens the draft form; saving a **public** bin with a title and description shows it immediately.
 - [ ] Saving a **private** bin with empty title and description shows "Waste bin" / "No description added."
-- [ ] Deleting a bin (after the confirm dialog) removes it; a reload confirms it's gone.
+- [ ] Editing a bin from its details sheet saves the change; a reload confirms it.
+- [ ] Deleting a bin (after "Delete" in the sheet's confirmation) removes it; a reload confirms it's gone.
 - [ ] Deleting a bin already removed in another tab shows a clear message, not a crash.
 - [ ] Feedback with and without a name shows the thank-you message, and the row is in D1.
-- [ ] "Locate me" works over HTTPS, and the place name updates (Nominatim still reachable).
+- [ ] "Find nearest bin" works over HTTPS, and the place name in the top bar updates (Nominatim still reachable).
 
 **Errors and validation**
 - [ ] DevTools offline: the app shell still loads from cache, and loading or saving shows the "Could not reach the server" message.

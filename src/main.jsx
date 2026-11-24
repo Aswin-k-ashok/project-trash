@@ -1,6 +1,8 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
+// Inter, bundled with the app: no request to a font service, and it works offline.
+import '@fontsource-variable/inter';
 import './index.css';
 
 if ('serviceWorker' in navigator) {
