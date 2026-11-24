@@ -2,7 +2,7 @@
 
 All notable changes to this waste bin locator project are documented in this file.
 
-Last updated: 2026-11-20 00:00:00 +0530
+Last updated: 2026-11-24 00:00:00 +0530
 
 ## [Unreleased]
 
@@ -35,8 +35,21 @@ Last updated: 2026-11-20 00:00:00 +0530
 - Added a map key for the green (public) and yellow (private) markers.
 - Added short confirmations after adding, editing or deleting a bin.
 - Added an "add a bin at the map centre" button, so bins can be added with the keyboard.
+- Added a "Find nearest bin" button to the sheet shown when nothing else is open.
+- Added an in-sheet confirmation before deleting a bin, replacing the browser's confirm box.
+- Added the Inter font, bundled with the app (`@fontsource-variable/inter`); until now it was named in the CSS but never loaded.
 
 ### Changed
+- Redesigned the app around the map: it fills the screen, with a floating top bar (name, area, install and feedback buttons) and a sheet for bin details, the add/edit form and the nearest bin. On phones the sheet runs along the bottom; from 900px wide it sits in a panel on the left. This replaces the hero section, the map card and the map popups.
+- Changed buttons to black (primary) and grey (secondary), with red kept for confirming a delete. All icons now come from one line-icon set.
+- Changed bin markers to round markers with a drawn bin icon instead of an emoji; the open bin is ringed in black.
+- Changed the bin type picker from a drop-down to two Public / Private buttons.
+- Changed the feedback button from a pill on the map to an icon in the top bar, and the install button to an icon beside it.
+- Changed the zoom buttons to match the new style, shown on wide screens only (phones pinch to zoom).
+- Changed adding or editing a bin to show that bin's details afterwards.
+- Changed map tiles to load from `tile.openstreetmap.org` without the a/b/c subdomains, as OpenStreetMap now recommends.
+- Changed the app's theme colour to white, and the service worker cache to `bin-there-v3` so installed apps pick up the new manifest.
+- Changed the page to run edge to edge on phones with a notch, keeping the floating UI inside the safe area, and to shrink for the Android keyboard so form fields stay visible.
 - Changed the default map center from Delhi to Kochi, Kerala, India.
 - Changed the map heading from a static community label to a live location-based area label.
 - Changed the add-bin flow from a browser `prompt()` to a proper inline form.
@@ -82,6 +95,10 @@ Last updated: 2026-11-20 00:00:00 +0530
 - Fixed the feedback dialog: Escape closes it, focus moves into it and back out, Tab stays inside it, and the map controls no longer draw over it.
 - Fixed a double-tapped delete sending two requests, the status saying "Saving new bin..." while deleting, and Cancel staying active while saving.
 - Fixed map markers having no accessible name for screen readers.
+- Fixed text inside the map (popups, attribution) using Arial instead of the app font.
+
+### Removed
+- Removed the full-screen button and the Ctrl/⌘ + scroll rule: the map is always full screen now, so the mouse wheel simply zooms it.
 
 ### Notes
 - The app is designed around a zero-cost hobby stack:

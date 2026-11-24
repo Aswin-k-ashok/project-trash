@@ -12,12 +12,14 @@ A minimal hobby-friendly waste bin locator built with React, Vite, Leaflet, Open
 
 ## Features
 
-- View waste bins on a map, with a key for public (green) and private (yellow) bins
-- Find your nearest bin with Locate Me, see how far it is, and open walking directions
-- Add a new bin by tapping the map, or with the + button, which drops a pin at the map centre (works from the keyboard)
-- Edit or delete a bin from its popup
-- Send suggestions and feedback from the map
+- A full-screen map of waste bins, with a key for public (green) and private (yellow) bins
+- Find your nearest bin, see how far it is, and open walking directions
+- Add a bin by tapping the map, or with Add bin, which drops a pin at the map centre (works from the keyboard)
+- Tap a bin to see its details, edit it or delete it
+- Send suggestions and feedback from the top bar
 - Install as an app (PWA)
+
+On phones, details and forms open in a sheet along the bottom of the screen; from 900px wide they open in a panel on the left.
 
 ## Project Structure
 
@@ -39,7 +41,9 @@ A minimal hobby-friendly waste bin locator built with React, Vite, Leaflet, Open
     ├── lib
     │   └── supabase.js
     └── components
-        └── BinMap.jsx
+        ├── BinMap.jsx
+        ├── InstallButton.jsx
+        └── icons.jsx
 ```
 
 ## 1. Create a Supabase project
@@ -70,6 +74,8 @@ npm run dev
 
 Open the local URL shown by Vite.
 
+Don't open the app with VS Code's Live Server or by double-clicking `index.html`: the page stays blank. The app is written in JSX, which browsers can't run directly. `npm run dev` translates it as it serves the page; Live Server sends the raw files. To try the production build locally, run `npm run build` and then `npm run preview`.
+
 ## 5. Deploy to Vercel
 
 1. Push this project to GitHub.
@@ -97,5 +103,5 @@ The ping cannot wake a project that is already paused. If the job fails with a D
 - Supabase free tier is enough for a hobby project, as long as the keep-awake workflow is running.
 - For production, make sure your Supabase Row Level Security policies match how open you want the project to be.
 - Anyone can delete or edit a bin, but only one per request, and at most 30 deletes and 60 edits an hour across all visitors. Every deleted bin is copied to the `deleted_bins` table and every edited bin's old version to `bin_edits`; the comments above those tables in `schema.sql` have queries to restore them.
-- On the page, the mouse wheel scrolls the page; hold Ctrl (⌘ on Mac) or pinch on a trackpad to zoom the map. In full screen the wheel zooms.
+- The Inter font is bundled with the app (`@fontsource-variable/inter`), so no font service is contacted.
 - The service worker only runs in production builds (`npm run build`, then `npm run preview` or a deploy), so `npm run dev` always serves fresh code.

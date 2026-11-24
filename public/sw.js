@@ -1,6 +1,7 @@
-// Bump the version whenever this file's caching rules change; `activate`
-// deletes every cache with a different name.
-const CACHE_NAME = 'bin-there-v2';
+// Bump the version whenever this file's caching rules change, or a file in
+// APP_SHELL_ASSETS changes (they have no content hash, so a cached copy would
+// never update); `activate` deletes every cache with a different name.
+const CACHE_NAME = 'bin-there-v3';
 const APP_SHELL_ASSETS = [
   '/',
   '/manifest.webmanifest',

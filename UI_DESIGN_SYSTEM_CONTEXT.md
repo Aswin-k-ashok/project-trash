@@ -4,15 +4,12 @@ This document defines the visual system for future UI work in this project. Use 
 
 ## Reference Intent
 
-The reference image suggests a soft, premium, mobile-first product aesthetic with:
+A calm, map-first utility in the style of modern ride and maps apps:
 
-- Rounded white device-like cards floating on a warm neutral background.
-- Minimal, calm surfaces with strong separation through shadow rather than borders.
-- Sparse but intentional use of a vivid purple accent for primary actions and active states.
-- Soft gray typography with black used only for high-emphasis headings.
-- Generous spacing, large corner radii, and a “friendly utility app” tone.
-
-This app should adapt that language for a map-based waste-bin product rather than copying the original literally.
+- The map is the product. It fills the screen and everything else floats over it.
+- White cards and sheets with soft shadows, on top of a full-colour map.
+- Black for primary actions, light grey for secondary ones. Colour is reserved for meaning on the map.
+- Large, plain type; few words; generous touch targets.
 
 ## Product Personality
 
@@ -20,7 +17,7 @@ The UI should feel:
 
 - Clean
 - Reassuring
-- Light
+- Quick
 - Mobile-native
 - Polished without becoming corporate
 
@@ -28,217 +25,155 @@ The app is a civic utility, so it should feel trustworthy and easy rather than f
 
 ## Core Visual Principles
 
-1. Use soft contrast.
-   Backgrounds should lean warm off-white or mist gray, not pure white-on-white or dark themes.
+1. Map first.
+   Nothing sits above or beside the map in the page flow. Controls, messages and forms float over it.
 
-2. Prefer rounded geometry.
-   Cards, controls, sheets, and buttons should use visibly rounded corners.
+2. Black and white chrome, colour on the map.
+   Buttons, text and surfaces are black, grey and white. Green, yellow and blue only mean something on the map.
 
-3. Reserve saturated color for action.
-   Purple should signal primary actions, active navigation, and important confirmation points.
+3. Rounded geometry.
+   Cards, sheets, controls and buttons use visibly rounded corners.
 
 4. Let elevation do the work.
-   Use subtle layered shadows and translucent surfaces instead of heavy outlines.
+   Use soft shadows rather than borders to lift floating UI off the map.
 
-5. Design mobile-first even on desktop.
-   Desktop layouts should still feel like expanded mobile surfaces rather than enterprise dashboards.
+5. Design for the phone first.
+   Wide screens get the same pieces, arranged in a side panel.
+
+## Layout
+
+- **Map:** fills the window (`.map-app__map`). The page itself never scrolls.
+- **Top bar:** app name, current area, and icon buttons for install and feedback. Phone: floats across the top. Wide screens: the top card of the left panel.
+- **Sheet:** one place for whatever is in focus, most important first: the add/edit form, then a selected bin's details, then the nearest bin after "Find nearest bin", and otherwise a short welcome with the "Find nearest bin" button. Phone: along the bottom edge. Wide screens (900px and up): under the top bar in a 380px panel on the left.
+- **Notices:** errors, confirmations and status chips. Phone: under the top bar. Wide screens: between the top bar and the sheet.
+- **Map buttons:** "Add bin" (black) and locate (white, round) in the bottom-right corner, sitting just above the sheet on phones. Zoom buttons top-right on wide screens only; phones pinch.
+- **Map key:** a small chip in the bottom-left corner, beside the map buttons on phones.
+- **Dialogs** (feedback): a card over a dimmed backdrop, at the bottom on phones and centred on wide screens.
+- When a pin or selected bin would be hidden behind the sheet or panel, the map pans to show it.
 
 ## Color System
 
-### Base Neutrals
+### Neutrals
 
-- `canvas`: `#f4f1ee`
-- `canvas-warm`: `#efe9e4`
-- `surface`: `rgba(255, 255, 255, 0.88)`
-- `surface-strong`: `#ffffff`
-- `surface-muted`: `#f6f3f0`
-- `line-soft`: `rgba(65, 45, 90, 0.08)`
-- `text-strong`: `#19161f`
-- `text`: `#4f475d`
-- `text-muted`: `#6b6379` (darkened from `#8a8198` to reach 4.5:1 contrast on the page background)
+- `ink`: `#111111` (primary buttons, headings, icons, focus ring)
+- `ink-hover`: `#2c2c30`
+- `text`: `#3f3f46`
+- `text-muted`: `#67676f` (at least 4.5:1 on white and on `surface-muted`)
+- `surface`: `#ffffff`
+- `surface-muted`: `#f2f2f3` (secondary buttons, segmented controls)
+- `surface-muted-hover`: `#e6e6e8`
+- `line`: `#e4e4e7` (input borders, dividers)
 
-### Accent Colors
+### Semantic
 
-- `primary`: `#6f35f5`
-- `primary-strong`: `#5926db`
-- `primary-soft`: `#efe7ff`
-- `primary-glow`: `rgba(111, 53, 245, 0.24)`
-
-### Semantic Utility
-
-- `success`: `#1f9d66`
-- `warning`: `#d1a031`
-- `danger`: `#cf4d5d`
-- `info`: `#2f7cf6`
+- `danger`: `#b42318` on `danger-soft` `#fef3f2`
+- `success`: `#067647` on `success-soft` `#ecfdf3`
 
 ### Map-Specific Meaning
 
-- Public bins remain green.
-- Private bins remain yellow.
-- User location remains blue.
+- Public bins: green `#1d8554` (badge text `#17663f` on `#e8f5ee`).
+- Private bins: yellow `#f2b705` with a `#a77a0c` ring for contrast (badge text `#7a5500` on `#fdf3d3`).
+- Your location: blue `#2f7cf6`.
 
-Do not replace these functional map colors with the purple brand accent.
+Keep the map tiles in full colour. Do not use these map colours for buttons or other UI.
 
 ## Typography
 
-Use a clean modern sans-serif stack with a softer tone than default system UI.
-
-Recommended stack:
+Inter, bundled with the app through `@fontsource-variable/inter`:
 
 ```css
-font-family: "Inter", "Segoe UI", sans-serif;
+font-family: "Inter Variable", Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 ```
 
-Type roles:
-
-- Display heading: bold, tight line-height, high contrast
-- Section heading: semibold, calm, compact
-- Body text: medium contrast, comfortable line-height
-- Helper text: muted, smaller, never fully gray-on-gray
-- Button text: semibold
+- Sheet titles: 20px, semibold, slightly tight letter-spacing.
+- Body: 15px. Helper text: 13–14px in `text-muted`.
+- Buttons: 15px semibold.
+- Form fields: 16px, which stops iPhone Safari zooming in on focus.
+- Numbers that change (distances, coordinates): tabular figures.
+- Sentence case everywhere. No uppercase labels.
 
 ## Radius System
 
-- Small inputs: `14px`
-- Standard controls: `16px`
-- Card surfaces: `24px`
-- Large hero/map panels: `28px` to `32px`
-- Full pills: `999px`
-
-Rounded corners are part of the brand. Avoid sharp corners unless required by a native library.
+- Buttons and inputs: `12px`
+- Cards, sheets, dialogs: `20px`
+- Chips, round buttons: `999px`
 
 ## Elevation System
 
-Preferred shadow style:
-
-- Soft
-- Wide blur
-- Low opacity
-- Slight vertical offset
-
-Examples:
-
-- Card: `0 18px 50px rgba(38, 25, 62, 0.08)`
-- Floating control: `0 10px 24px rgba(38, 25, 62, 0.14)`
-- Modal/sheet: `0 28px 70px rgba(25, 16, 40, 0.2)`
-
-Avoid harsh black shadows.
+- Floating control (map buttons, top bar on phones, chips): `0 1px 2px rgba(0,0,0,0.06), 0 6px 16px rgba(0,0,0,0.12)`
+- Card or panel: `0 1px 2px rgba(0,0,0,0.06), 0 12px 32px rgba(0,0,0,0.14)`
+- Bottom sheet: `0 -4px 24px rgba(0,0,0,0.12)`
 
 ## Spacing System
 
-Use airy spacing. Default to:
-
-- `8px`
-- `12px`
-- `16px`
-- `20px`
-- `24px`
-- `32px`
-
-If a layout feels cramped, increase space before adding decoration.
+Use `8px`, `12px`, `16px`, `20px` and `24px`. Floating UI keeps 12px from the screen edge on phones and 16px on wide screens, inside the safe-area insets.
 
 ## Component Guidelines
 
-### App Shell
-
-- Use a soft atmospheric background with blurred color blooms.
-- Keep the main content inside one or two large floating surfaces.
-- On desktop, center the experience with generous side margins.
-
-### Cards
-
-- White or translucent white
-- Large radii
-- Very light border or none
-- Soft shadow
-
 ### Buttons
 
-- Primary buttons use a purple gradient or purple solid fill.
-- Secondary buttons use soft neutral fills.
-- Floating map controls should look tactile and compact.
-- Button labels should be short and direct.
+- **Primary:** black fill, white text, 48px tall. One per view.
+- **Secondary:** `surface-muted` fill, black text.
+- **Danger:** red fill, white text, only to confirm a delete. The first tap on delete is a grey icon button with a red icon.
+- **Icon buttons:** 44px (top bar), 48px tiles beside a primary button (Edit, Delete), 36px round grey for close.
+- Press feedback: scale to 0.98. Disabled: 50% opacity.
+- Every icon-only button has an `aria-label`.
+
+### Icons
+
+One line-icon set (`src/components/icons.jsx`): 24px grid, 2px stroke, round caps. Never emoji.
 
 ### Forms
 
-- Inputs should sit on white surfaces.
-- Use soft borders and clear focus rings: a solid 3px `primary` outline on `:focus-visible`.
-- All text, including placeholders and helper text, needs at least 4.5:1 contrast (WCAG AA).
-- Labels should be concise and always visible.
+- Labels are always visible, 14px semibold.
+- Inputs: white, 1px `line` border, black border on focus.
+- Two-option choices (bin type) use a segmented control, not a drop-down.
+- Cancel and Save sit side by side at the bottom.
 
-### Modal / Sheet Patterns
+### Focus
 
-- Feedback, setup, and detail flows should appear as floating cards or bottom sheets.
-- Use blurred or dimmed backdrops sparingly.
-- Keep modal width compact and mobile-friendly.
+- `:focus-visible` shows a 2px solid `ink` outline with a 2px gap.
+- Headings that receive focus from code (to guide screen readers) show no ring.
+- Opening a bin moves focus to its details; closing returns focus to its marker.
 
-### Status Pills
+### Map markers
 
-- Light tint backgrounds
-- Rounded pill shape
-- Compact text
+- Round, 30px, white 2px border, drawn bin icon. Selected: 40px with a black ring. Draft (not saved yet): dashed black outline.
+- Markers are keyboard buttons: Enter or Space opens them.
 
-### Map Overlays
+### Status
 
-- Controls should float above the map, not compete with the base map tiles.
-- Bottom-center and bottom-right overlays should feel like native map controls.
-- Placement: zoom top-left, map key top-right, messages and status pills top-center (below both on screens under 900px), map buttons bottom-right, feedback bottom-center, and forms as bottom sheets over the map. Nothing is inserted above the map, so it never jumps down the page.
-- Overlay hierarchy:
-  - Primary map content
-  - Floating controls
-  - Modals/sheets
+- Loading or saving: a black pill with a small spinner.
+- Errors and confirmations: a white card tinted red or green, with a close button. Confirmations hide after 4 seconds.
 
 ## Motion
 
-Motion should be subtle and purposeful:
-
-- Hover lift: `translateY(-1px)` or `-2px`
-- Modal entrance: short fade and upward slide
-- Button transitions: `160ms` to `220ms`
-
-Avoid bouncy or overly playful animation.
+- Buttons: 120–160ms.
+- Sheet content: 180ms fade when it changes.
+- Dialog: short fade and upward slide.
+- All motion is cut to near zero when the user prefers reduced motion.
 
 ## Content Tone in UI
 
-Text should be:
-
-- Human
-- Short
-- Calm
-- Slightly playful when appropriate
-
-Avoid cluttered helper text and overly technical labels in the primary UI.
-
-## Implementation Rules For Future Updates
-
-1. Start with design tokens first.
-2. Reuse the same purple primary accent across new actions.
-3. Keep all new surfaces rounded and elevated consistently.
-4. Favor mobile-sheet patterns over dense dashboard panels.
-5. Preserve semantic map colors for bin meaning and location.
-6. Add new UI in a way that still feels coherent on small screens.
+Human, short and calm. Use sentence case and plain words ("Add bin", "Find nearest bin", "Keep it").
 
 ## Anti-Patterns
 
 Avoid:
 
-- Flat admin-dashboard layouts
-- Harsh green-on-white as the primary brand language
-- Tiny squared buttons
-- Heavy borders everywhere
-- Dense blocks of text
-- Multiple competing accent colors
+- Anything that pushes the map down or makes the page scroll
+- Gradients and glowing shadows on buttons
+- Uppercase labels and badges
+- Colour on buttons or chrome (keep colour for the map)
+- Native `alert()` / `confirm()` boxes
 - Dark mode styling unless explicitly requested
 
-## Current Translation For This Project
+## Implementation Rules For Future Updates
 
-The design system should currently express itself through:
-
-- A soft off-white app canvas
-- A rounded white hero panel
-- A large elevated map surface
-- Purple primary buttons and active accents
-- Floating map utilities
-- Minimal, readable forms and modal feedback flows
+1. Start with the tokens in `src/index.css`.
+2. Add new views as sheet content, not as new floating cards.
+3. Keep floating UI inside the safe area and clear of the map attribution.
+4. Check every new text colour pair reaches 4.5:1.
+5. Check new layouts at 320px, 390px and desktop widths.
 
 Use this file as the source of truth for future UI iterations.
