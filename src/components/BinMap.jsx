@@ -8,6 +8,7 @@ import {
   useState,
 } from 'react';
 import {
+  AttributionControl,
   MapContainer,
   Marker,
   TileLayer,
@@ -27,6 +28,7 @@ import {
   voteOnBin,
 } from '../lib/data';
 import { getVoterId } from '../lib/voter';
+import FullscreenButton from './FullscreenButton';
 import InstallButton from './InstallButton';
 import {
   BinIcon,
@@ -140,10 +142,16 @@ function getDirectionsUrl(bin) {
   return `https://www.google.com/maps/dir/?api=1&destination=${destination}&travelmode=walking`;
 }
 
+// Whether an element takes up room on screen (not display: none).
+function isShown(element) {
+  return Boolean(element) && element.getClientRects().length > 0;
+}
+
 // Pan the map, if needed, so a point isn't hidden by the floating UI.
 // Wide screens: move it right of the side panel. Phones: keep it in the strip
-// between the top bar and the map buttons that sit on top of the sheet.
-function keepPointInView(map, latlng, { isWideLayout, panel, topbar, sheet, floating }) {
+// between the top bar (and the map key under it) and the map buttons, which
+// sit at the bottom or on top of the sheet.
+function keepPointInView(map, latlng, { isWideLayout, panel, aboveStrip, belowStrip }) {
   const mapRect = map.getContainer().getBoundingClientRect();
   const point = map.latLngToContainerPoint(latlng);
   const x = mapRect.left + point.x;
@@ -164,11 +172,15 @@ function keepPointInView(map, latlng, { isWideLayout, panel, topbar, sheet, floa
     return;
   }
 
-  const top = topbar.getBoundingClientRect().bottom + OVERLAY_GAP;
+  const top =
+    Math.max(
+      mapRect.top,
+      ...aboveStrip.filter(isShown).map((element) => element.getBoundingClientRect().bottom)
+    ) + OVERLAY_GAP;
   const bottom =
     Math.min(
-      sheet.getBoundingClientRect().top,
-      ...floating.map((element) => element.getBoundingClientRect().top)
+      mapRect.bottom,
+      ...belowStrip.filter(isShown).map((element) => element.getBoundingClientRect().top)
     ) - OVERLAY_GAP;
 
   if (y > bottom) {
@@ -522,9 +534,8 @@ function BinMap() {
     keepPointInView(map, focusPosition, {
       isWideLayout: window.matchMedia?.(WIDE_LAYOUT_QUERY)?.matches,
       panel: panelRef.current,
-      topbar: topbarRef.current,
-      sheet: sheetRef.current,
-      floating: [dockRef.current, legendRef.current].filter(Boolean),
+      aboveStrip: [topbarRef.current, legendRef.current],
+      belowStrip: [sheetRef.current, dockRef.current],
     });
   }, [focusPosition, sheetKey]);
 
@@ -1366,14 +1377,20 @@ function BinMap() {
     : 'Add bin at the map centre';
 
   return (
-    <div className="map-app" ref={appRef}>
+    // data-sheet tells the CSS what the sheet shows; phones hide the resting
+    // "home" sheet to leave the map clear.
+    <div className="map-app" ref={appRef} data-sheet={sheetMode}>
       <MapContainer
         ref={mapRef}
         center={DEFAULT_CENTER}
         zoom={DEFAULT_ZOOM}
         zoomControl={false}
+        attributionControl={false}
         className="map-app__map"
       >
+        {/* Without Leaflet's own credit, so the required OpenStreetMap credit
+            fits beside the map key on phones. */}
+        <AttributionControl position="bottomright" prefix={false} />
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
           url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
@@ -1435,6 +1452,7 @@ function BinMap() {
             </div>
             <div className="topbar__actions">
               <InstallButton />
+              <FullscreenButton />
               <button
                 type="button"
                 ref={feedbackTriggerRef}
@@ -1534,13 +1552,16 @@ function BinMap() {
         <div className="map-dock" ref={dockRef}>
           <button
             type="button"
-            className="map-button"
+            className="map-button locate-button"
             onClick={handleLocateMe}
             disabled={isLocating}
-            aria-label={isLocating ? 'Locating your position' : 'Find me and my nearest bin'}
-            title={isLocating ? 'Locating your position' : 'Find me and my nearest bin'}
+            aria-label={isLocating ? 'Finding you and your nearest bin' : 'Find me and my nearest bin'}
+            title={isLocating ? 'Finding you and your nearest bin' : 'Find me and my nearest bin'}
           >
             <LocateIcon size={22} />
+            {/* Shown on phones when nothing else is open, where it stands in
+                for the "Find nearest bin" card. */}
+            <span className="locate-button__label">Nearest bin</span>
           </button>
           <button
             type="button"

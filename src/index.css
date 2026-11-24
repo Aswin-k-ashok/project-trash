@@ -210,6 +210,8 @@ button {
 
 .map-app {
   --sheet-height: 0px;
+  /* Where floating UI starts under the phone top bar (8 + 52 + 8 px). */
+  --below-topbar: calc(var(--safe-top) + 68px);
   position: relative;
   width: 100%;
   height: 100%;
@@ -231,23 +233,23 @@ button {
   pointer-events: none;
 }
 
-/* Phone layout first. The panel wrapper steps aside so the top bar, notices
-   and sheet can each be placed over the map. */
+/* The panel wrapper steps aside on phones, so the top bar, notices and sheet
+   can each be placed over the map; wide screens turn it into a side panel. */
 .map-panel {
   display: contents;
 }
 
 .topbar {
   position: absolute;
-  top: calc(var(--safe-top) + 12px);
-  left: calc(var(--safe-left) + 12px);
-  right: calc(var(--safe-right) + 12px);
+  top: calc(var(--safe-top) + 8px);
+  left: calc(var(--safe-left) + 8px);
+  right: calc(var(--safe-right) + 8px);
   display: flex;
   align-items: center;
   gap: 10px;
-  height: 60px;
-  padding: 0 6px 0 12px;
-  border-radius: 16px;
+  height: 52px;
+  padding: 0 4px 0 10px;
+  border-radius: 14px;
   background: var(--surface);
   box-shadow: var(--shadow-float);
   pointer-events: auto;
@@ -258,9 +260,9 @@ button {
   flex: 0 0 auto;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 10px;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
   background: var(--ink);
   color: #ffffff;
 }
@@ -275,7 +277,7 @@ button {
 .topbar__title {
   margin: 0;
   color: var(--text-strong);
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 600;
   line-height: 1.2;
   letter-spacing: -0.01em;
@@ -285,7 +287,7 @@ button {
   margin: 0;
   overflow: hidden;
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: 12px;
   line-height: 1.35;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -297,11 +299,13 @@ button {
   align-items: center;
 }
 
+/* Floats over the map key, so a message is never hidden behind it. */
 .notices {
   position: absolute;
-  top: calc(var(--safe-top) + 80px);
-  left: calc(var(--safe-left) + 12px);
-  right: calc(var(--safe-right) + 12px);
+  z-index: 1;
+  top: var(--below-topbar);
+  left: calc(var(--safe-left) + 8px);
+  right: calc(var(--safe-right) + 8px);
   display: grid;
   gap: 8px;
   justify-items: center;
@@ -313,22 +317,22 @@ button {
   left: 0;
   right: 0;
   bottom: 0;
-  max-height: calc(100% - var(--safe-top) - 88px);
+  max-height: calc(100% - var(--below-topbar));
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 20px calc(var(--safe-right) + 20px) calc(var(--safe-bottom) + 20px)
-    calc(var(--safe-left) + 20px);
+  padding: 16px calc(var(--safe-right) + 16px) calc(var(--safe-bottom) + 16px)
+    calc(var(--safe-left) + 16px);
   border-radius: var(--radius-card) var(--radius-card) 0 0;
   background: var(--surface);
   box-shadow: var(--shadow-sheet);
   pointer-events: auto;
 }
 
-/* Map buttons sit just above the sheet, clear of the attribution line. */
+/* Map buttons: in the bottom corner, or just above the sheet when one is open. */
 .map-dock {
   position: absolute;
   right: calc(var(--safe-right) + 12px);
-  bottom: calc(var(--sheet-height) + 30px);
+  bottom: calc(max(var(--sheet-height), var(--safe-bottom)) + 12px);
   display: flex;
   align-items: center;
   gap: 10px;
@@ -337,19 +341,19 @@ button {
 
 .map-legend {
   position: absolute;
-  left: calc(var(--safe-left) + 12px);
-  bottom: calc(var(--sheet-height) + 39px);
+  top: var(--below-topbar);
+  left: calc(var(--safe-left) + 8px);
   display: flex;
   align-items: center;
-  gap: 12px;
-  height: 30px;
+  gap: 10px;
+  height: 26px;
   margin: 0;
-  padding: 0 12px;
+  padding: 0 10px;
   border-radius: 999px;
   background: var(--surface);
   box-shadow: var(--shadow-float);
   color: var(--text);
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 500;
   list-style: none;
   pointer-events: auto;
@@ -358,7 +362,7 @@ button {
 .map-legend li {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
 }
 
 /* Zoom buttons are for mouse users on wide screens; phones pinch. */
@@ -366,25 +370,87 @@ button {
   display: none;
 }
 
-/* Leaflet's attribution follows the sheet up. */
-.map-app .leaflet-bottom {
-  bottom: var(--sheet-height);
-}
+/* Phones: keep as much map as possible. Nothing rests at the bottom until a
+   bin, the nearest bin or a form is open; the map key and the attribution
+   share one small row under the top bar. */
+@media (max-width: 899px) {
+  .map-app[data-sheet="home"] .sheet {
+    display: none;
+  }
 
-@media (max-width: 359px) {
-  /* Too narrow for the label next to the key: show just the plus. */
-  .add-bin-button {
+  .map-app .leaflet-bottom.leaflet-right {
+    top: var(--below-topbar);
+    right: calc(var(--safe-right) + 8px);
+    bottom: auto;
+  }
+
+  .map-app .leaflet-bottom .leaflet-control-attribution {
+    height: 26px;
+    padding: 0 10px;
+    border-radius: 999px;
+    background: var(--surface);
+    box-shadow: var(--shadow-float);
+    line-height: 26px;
+  }
+
+  /* While a sheet is open, the map buttons shrink to icons. */
+  .map-app:not([data-sheet="home"]) .locate-button,
+  .map-app:not([data-sheet="home"]) .add-bin-button {
     width: 48px;
     padding: 0;
   }
 
-  .add-bin-button__label {
+  .map-app:not([data-sheet="home"]) .locate-button__label,
+  .map-app:not([data-sheet="home"]) .add-bin-button__label {
     position: absolute;
     width: 1px;
     height: 1px;
     overflow: hidden;
     clip: rect(0 0 0 0);
     white-space: nowrap;
+  }
+
+  /* A tighter sheet: less padding, and only what's needed on the move. */
+  .sheet__content {
+    gap: 12px;
+  }
+
+  .sheet .sheet__title {
+    font-size: 18px;
+  }
+
+  .sheet__coords,
+  .vote__hint {
+    display: none;
+  }
+
+  .vote {
+    padding: 6px 6px 6px 14px;
+  }
+
+  .bin-form {
+    gap: 12px;
+  }
+
+  .field input,
+  .field textarea {
+    min-height: 44px;
+    padding: 10px 12px;
+  }
+
+  .field textarea {
+    min-height: 64px;
+  }
+
+  .segmented__label {
+    height: 36px;
+  }
+}
+
+@media (max-width: 359px) {
+  /* Too narrow for the key and the attribution side by side. */
+  .map-app .leaflet-bottom.leaflet-right {
+    top: calc(var(--below-topbar) + 32px);
   }
 }
 
@@ -407,8 +473,23 @@ button {
     flex: 0 0 auto;
     height: 64px;
     margin-bottom: 12px;
+    padding: 0 6px 0 12px;
     border-radius: var(--radius-card);
     box-shadow: var(--shadow-card);
+  }
+
+  .topbar__logo {
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
+  }
+
+  .topbar__title {
+    font-size: 16px;
+  }
+
+  .topbar__place {
+    font-size: 13px;
   }
 
   /* Takes no room when empty. It stays in the page even then, because its
@@ -451,12 +532,28 @@ button {
   }
 
   .map-legend {
+    top: auto;
     left: 16px;
     bottom: 16px;
+    gap: 12px;
+    height: 30px;
+    padding: 0 12px;
+    font-size: 12px;
   }
 
-  .map-app .leaflet-bottom {
-    bottom: 0;
+  /* The round locate button needs no label beside "Find nearest bin". */
+  .locate-button {
+    width: 48px;
+    padding: 0;
+  }
+
+  .locate-button__label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
   }
 }
 
@@ -466,13 +563,17 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 48px;
+  gap: 8px;
+  min-width: 48px;
   height: 48px;
   padding: 0;
   border: 0;
   border-radius: 999px;
   background: var(--surface);
   color: var(--ink);
+  font-size: 15px;
+  font-weight: 600;
+  white-space: nowrap;
   box-shadow: var(--shadow-float);
   transition: background-color 160ms ease;
 }
@@ -484,6 +585,10 @@ button {
 .map-button:disabled {
   cursor: progress;
   color: var(--text-muted);
+}
+
+.locate-button {
+  padding: 0 18px 0 14px;
 }
 
 .add-bin-button {

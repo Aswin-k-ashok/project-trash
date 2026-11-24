@@ -43,11 +43,12 @@ The app is a civic utility, so it should feel trustworthy and easy rather than f
 ## Layout
 
 - **Map:** fills the window (`.map-app__map`). The page itself never scrolls.
-- **Top bar:** app name, current area, and icon buttons for install and feedback. Phone: floats across the top. Wide screens: the top card of the left panel.
-- **Sheet:** one place for whatever is in focus, most important first: the add/edit form, then a selected bin's details, then the nearest bin after "Find nearest bin", and otherwise a short welcome with the "Find nearest bin" button. Phone: along the bottom edge. Wide screens (900px and up): under the top bar in a 380px panel on the left.
-- **Notices:** errors, confirmations and status chips. Phone: under the top bar. Wide screens: between the top bar and the sheet.
-- **Map buttons:** "Add bin" (black) and locate (white, round) in the bottom-right corner, sitting just above the sheet on phones. Zoom buttons top-right on wide screens only; phones pinch.
-- **Map key:** a small chip in the bottom-left corner, beside the map buttons on phones.
+- **Top bar:** app name, current area, and icon buttons for install, full screen and feedback. Phone: a slim 52px bar floating across the top. Wide screens: the top card of the left panel.
+- **Sheet:** one place for whatever is in focus, most important first: the add/edit form, then a selected bin's details, then the nearest bin after "Find nearest bin", and otherwise a short welcome with the "Find nearest bin" button. Phone: along the bottom edge, and only when something is open; the welcome isn't shown, so the map gets the screen. Wide screens (900px and up): under the top bar in a 380px panel on the left.
+- **Notices:** errors, confirmations and status chips. Phone: under the top bar, over the map key. Wide screens: between the top bar and the sheet.
+- **Map buttons:** "Add bin" (black) and locate (white) in the bottom-right corner. Phone: labelled pills ("Nearest bin", "Add bin") when nothing is open, shrinking to round icons above an open sheet. Wide screens: locate is a round icon. Zoom buttons top-right on wide screens only; phones pinch.
+- **Map key and attribution:** phone: two small chips in one row under the top bar (key left, "© OpenStreetMap contributors" right). Wide screens: key bottom-left, attribution bottom-right.
+- **Full screen:** a top-bar button using the browser's Fullscreen API, shown only where it's supported (not iPhone).
 - **Dialogs** (feedback): a card over a dimmed backdrop, at the bottom on phones and centred on wide screens.
 - When a pin or selected bin would be hidden behind the sheet or panel, the map pans to show it.
 
