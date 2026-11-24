@@ -15,7 +15,8 @@ A minimal hobby-friendly waste bin locator built with React, Vite, Leaflet, Open
 - A full-screen map of waste bins, with a key for public (green) and private (yellow) bins
 - Find your nearest bin, see how far it is, and open walking directions
 - Add a bin by tapping the map, or with Add bin, which drops a pin at the map centre (works from the keyboard)
-- Tap a bin to see its details, edit it or delete it
+- Tap a bin to see its details, edit it, or vote on whether it's usable (thumbs up or down)
+- Bins that enough people vote down are removed from the map; nobody can delete one on their own
 - Send suggestions and feedback from the top bar
 - Install as an app (PWA)
 
@@ -31,15 +32,21 @@ On phones, details and forms open in a sheet along the bottom of the screen; fro
 ├── .env.example
 ├── .gitignore
 ├── README.md
+├── DATA_MODEL.md              # the data and rules any backend must provide
 ├── supabase
-│   └── schema.sql
+│   └── migrations             # database changes, run in order
+│       ├── 0001_initial.sql
+│       └── 0002_votes.sql
 └── src
     ├── App.jsx
     ├── main.jsx
     ├── index.css
     ├── config.js
     ├── lib
-    │   └── supabase.js
+    │   ├── voter.js           # this browser's anonymous voter id
+    │   └── data               # the only code that talks to the backend
+    │       ├── index.js
+    │       └── supabaseProvider.js
     └── components
         ├── BinMap.jsx
         ├── InstallButton.jsx
@@ -48,9 +55,16 @@ On phones, details and forms open in a sheet along the bottom of the screen; fro
 
 ## 1. Create a Supabase project
 
-Create a free Supabase project and run the SQL from [supabase/schema.sql](./supabase/schema.sql) in the SQL Editor.
+Create a free Supabase project. Then, in its SQL Editor, run each file in [supabase/migrations](./supabase/migrations) once, in order: first `0001_initial.sql`, then `0002_votes.sql`, and so on.
 
-Run it again whenever `schema.sql` changes. It is safe to re-run.
+**Already have a project?** Run only the migrations it hasn't had yet.
+- Projects set up with the old `supabase/schema.sql` already have `0001`; start from `0002_votes.sql`.
+- From `0002` on, `select * from public.schema_migrations;` lists the migrations already run.
+- Don't run an older migration again: later ones change what it set up.
+
+Deploy the app's code together with a new migration. For example, once `0002` has run, the previous version of the app can no longer add or delete bins.
+
+To change the schema later, add a new numbered file; see [DATA_MODEL.md](./DATA_MODEL.md).
 
 ## 2. Add environment variables
 
@@ -102,6 +116,8 @@ The ping cannot wake a project that is already paused. If the job fails with a D
 - The map uses OpenStreetMap tiles, so there is no Google Maps cost.
 - Supabase free tier is enough for a hobby project, as long as the keep-awake workflow is running.
 - For production, make sure your Supabase Row Level Security policies match how open you want the project to be.
-- Anyone can delete or edit a bin, but only one per request, and at most 30 deletes and 60 edits an hour across all visitors. Every deleted bin is copied to the `deleted_bins` table and every edited bin's old version to `bin_edits`; the comments above those tables in `schema.sql` have queries to restore them.
+- Voting: each browser gets a random, anonymous voter id, allowing one vote per bin per device. Whoever adds a bin gives it the first thumbs up. A bin is removed from the map once it has at least 3 thumbs down and 3 more thumbs down than up. Limits: 60 votes per device and 30 removals overall per hour, and 60 edits per hour. Full rules are in [DATA_MODEL.md](./DATA_MODEL.md).
+- Removed bins stay in the database with `status = 'removed'`. The comment at the top of `0002_votes.sql` shows how to list them and put one back. Every edit keeps the old version in `bin_edits`; `0001_initial.sql` shows how to undo one.
+- The backend can be swapped: all data access goes through `src/lib/data`, and `VITE_DATA_PROVIDER` (default `supabase`) picks the provider. See [DATA_MODEL.md](./DATA_MODEL.md).
 - The Inter font is bundled with the app (`@fontsource-variable/inter`), so no font service is contacted.
 - The service worker only runs in production builds (`npm run build`, then `npm run preview` or a deploy), so `npm run dev` always serves fresh code.

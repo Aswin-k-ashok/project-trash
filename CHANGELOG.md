@@ -36,12 +36,17 @@ Last updated: 2026-11-24 00:00:00 +0530
 - Added short confirmations after adding, editing or deleting a bin.
 - Added an "add a bin at the map centre" button, so bins can be added with the keyboard.
 - Added a "Find nearest bin" button to the sheet shown when nothing else is open.
-- Added an in-sheet confirmation before deleting a bin, replacing the browser's confirm box.
+- Added voting: each bin's details ask "Is it usable?" with thumbs up and down. Whoever adds a bin gives it the first thumbs up. A bin is removed from the map once it has at least 3 thumbs down and 3 more down than up. Limits: 60 votes per device and 30 removals overall per hour.
+- Added an anonymous voter id per browser (`src/lib/voter.js`), allowing one vote per bin per device without accounts.
+- Added `supabase/migrations`, numbered SQL files run once each in order, with a `schema_migrations` table recording which have run. `0002_votes.sql` adds the `bin_votes` table, bin `status`, `removed_at` and vote totals, and the `create_bin()`, `vote_on_bin()` and `my_votes()` functions.
+- Added a data layer (`src/lib/data`), the only code that talks to the backend, with the backend chosen by `VITE_DATA_PROVIDER` (default `supabase`), and `DATA_MODEL.md` describing the data and the rules any backend must enforce.
 - Added the Inter font, bundled with the app (`@fontsource-variable/inter`); until now it was named in the CSS but never loaded.
 
 ### Changed
 - Redesigned the app around the map: it fills the screen, with a floating top bar (name, area, install and feedback buttons) and a sheet for bin details, the add/edit form and the nearest bin. On phones the sheet runs along the bottom; from 900px wide it sits in a panel on the left. This replaces the hero section, the map card and the map popups.
-- Changed buttons to black (primary) and grey (secondary), with red kept for confirming a delete. All icons now come from one line-icon set.
+- Changed buttons to black (primary) and grey (secondary). All icons now come from one line-icon set.
+- Changed adding a bin to go through `create_bin()` instead of a direct insert, and `update_bin()` to edit only bins still on the map. The public API now lists only bins on the map and accepts no direct writes.
+- Changed database errors to show one plain message per kind of problem (setup, invalid input, rate limit, network) instead of Supabase-specific ones.
 - Changed bin markers to round markers with a drawn bin icon instead of an emoji; the open bin is ringed in black.
 - Changed the bin type picker from a drop-down to two Public / Private buttons.
 - Changed the feedback button from a pill on the map to an icon in the top bar, and the install button to an icon beside it.
@@ -99,6 +104,9 @@ Last updated: 2026-11-24 00:00:00 +0530
 
 ### Removed
 - Removed the full-screen button and the Ctrl/⌘ + scroll rule: the map is always full screen now, so the mouse wheel simply zooms it.
+- Removed deleting: the Delete button and the `delete_bin()` function are gone, and bins leave the map only by votes. Bins deleted earlier stay in `deleted_bins`.
+- Removed `supabase/schema.sql` (now `supabase/migrations/0001_initial.sql`) and `src/lib/supabase.js` (now `src/lib/data/supabaseProvider.js`).
+- Removed the fallback for databases missing the `title`, `description` or `bin_type` columns; run the migrations instead.
 
 ### Notes
 - The app is designed around a zero-cost hobby stack:
