@@ -1,5 +1,10 @@
--- Safe to run again: every statement is idempotent, so re-run the whole file
--- after pulling changes.
+-- 0001_initial: bins, feedback, the delete and edit archives, delete_bin()
+-- and update_bin(). This was supabase/schema.sql; projects set up before the
+-- migrations folder existed have already run it.
+--
+-- Run migrations once each, in order (see the README). Later migrations
+-- change what this one sets up, so never re-run it on a project that has
+-- run newer ones.
 
 create extension if not exists pgcrypto;
 

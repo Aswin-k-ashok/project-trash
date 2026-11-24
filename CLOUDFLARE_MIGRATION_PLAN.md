@@ -4,6 +4,7 @@ Move **Bin There** from **Supabase (database) + Vercel (hosting)** to **Cloudfla
 
 - Written: 2026-11-19
 - Status: Phase 0 step 1 (the service worker fix) is done in code as of 2026-11-20 and needs deploying. Later phases not started. The daily Supabase ping (`.github/workflows/keep-supabase-awake.yml`) covers the gap until cutover.
+- Updated 2026-11-24: voting replaced deleting ([supabase/migrations/0002_votes.sql](supabase/migrations/0002_votes.sql)), and all data access moved behind [src/lib/data](src/lib/data/index.js). [DATA_MODEL.md](DATA_MODEL.md) is now the contract the Worker must meet; Phases 3 to 6 are updated for it.
 - Rough effort: 1 to 2 focused days, plus a few days of waiting between phases for browsers to pick up the service worker fix.
 
 ---
@@ -14,7 +15,7 @@ Move **Bin There** from **Supabase (database) + Vercel (hosting)** to **Cloudfla
 |---|---|
 | Supabase pauses free projects after 7 days with no activity. On 2026-11-19 the project hostname already returned "no such domain", meaning it was paused. | D1 on the Workers Free plan does not pause. |
 | Running depends on a keep-awake workaround. | Nothing to keep awake. |
-| Any visitor can delete or edit any bin, through the `delete_bin()` and `update_bin()` functions: one bin per call, at most 30 deletes and 60 edits an hour, with the old version copied to `deleted_bins` / `bin_edits` first. | All writes go through our own API, so delete and edit rules can be tightened (Phase 8). |
+| Bins are removed by votes from anonymous browser ids, with limits enforced in Postgres functions. | The same rules run in our own Worker, which can also see IP addresses and add bot checks (Phase 8). |
 | Hosting and database are with two providers, set up with two sets of env vars. | One provider and one config file, with no secrets in the frontend. |
 
 Vercel itself works fine. It moves only because Cloudflare can serve the site and the API from the same Worker.
@@ -25,28 +26,31 @@ Vercel itself works fine. It moves only because Cloudflare can serve the site an
 
 **Frontend:** React 18 + Vite 5.4 single-page app, Leaflet/OpenStreetMap, Nominatim reverse geocoding, and a PWA (`public/manifest.webmanifest`, `public/sw.js`). It has no router and is served from `/`.
 
-**Database:** two tables, defined in [supabase/schema.sql](supabase/schema.sql).
+**Database:** defined by the files in [supabase/migrations](supabase/migrations), run in order. [DATA_MODEL.md](DATA_MODEL.md) describes the records and rules in a backend-neutral way.
 
 | Table | Columns | Anon access (RLS) |
 |---|---|---|
-| `bins` | `id uuid`, `latitude double`, `longitude double`, `bin_type text default 'public'`, `title text`, `description text`, `created_at timestamptz` | select, insert; delete only through `delete_bin(bin_id)`, update only through `update_bin(...)` |
+| `bins` | `id uuid`, `latitude double`, `longitude double`, `bin_type text default 'public'`, `title text`, `description text`, `created_at timestamptz`, `status text` (`active`/`removed`), `removed_at timestamptz`, `upvotes int`, `downvotes int` | select active bins only; every write goes through `create_bin()`, `update_bin()` or `vote_on_bin()` |
+| `bin_votes` | `bin_id uuid`, `voter_id uuid`, `vote smallint` (1 or -1), `created_at`, `updated_at`; one row per bin per voter | none; read your own through `my_votes()` |
 | `app_feedback` | `id uuid`, `name text`, `feedback text`, `created_at timestamptz` | insert only |
-| `deleted_bins` | the `bins` columns plus `deletion_id`, `deleted_at`; an archive of deleted bins | none |
 | `bin_edits` | the `bins` columns plus `edit_id`, `edited_at`; the version of a bin from before each edit | none |
+| `deleted_bins` | bins deleted before voting replaced deleting | none |
+| `schema_migrations` | which migration files have run | none |
 
 Check constraints limit `bin_type` to `public`/`private`, coordinates to valid ranges, and text to the same lengths as the Phase 4 validation rules.
 
-**Every database call** is in [src/components/BinMap.jsx](src/components/BinMap.jsx) and goes through [src/lib/supabase.js](src/lib/supabase.js):
+**Every database call** is in [src/lib/data/supabaseProvider.js](src/lib/data/supabaseProvider.js), behind the functions in [src/lib/data/index.js](src/lib/data/index.js). Components never call Supabase:
 
-| What | Where (`BinMap.jsx`) | Supabase call |
-|---|---|---|
-| Load all bins | `loadBins` → `fetchAllBins` | `from('bins').select('*', { count: 'exact' }).order(...).range(...)` in 1,000-row pages, because Supabase caps each response at 1,000 rows |
-| Add a bin | `handleSaveDraftBin` | `insert(payload).select().single()`, plus a "legacy insert" fallback for old schemas |
-| Edit a bin | `saveBinChanges` | `rpc('update_bin', { bin_id, new_latitude, new_longitude, new_bin_type, new_title, new_description })`, which returns the updated row, or no row if the bin was already gone |
-| Delete a bin | `deleteBin` | `rpc('delete_bin', { bin_id })`, which returns `false` if the bin was already gone |
-| Send feedback | `handleFeedbackSubmit` | `from('app_feedback').insert({ name, feedback })` |
+| Function | Supabase call |
+|---|---|
+| `listBins` | `from('bins').select('*', { count: 'exact' }).eq('status', 'active')...range(...)` in 1,000-row pages, because Supabase caps each response at 1,000 rows |
+| `listMyVotes` | `rpc('my_votes', { voter })`, paged the same way |
+| `createBin` | `rpc('create_bin', { new_latitude, ..., voter })`, which also records the creator's upvote |
+| `updateBin` | `rpc('update_bin', { bin_id, new_latitude, ... })`, which returns no row if the bin is gone or removed |
+| `voteOnBin` | `rpc('vote_on_bin', { target_bin_id, voter, vote_value })`, which returns the totals, the voter's vote and the status, or no row if the bin is gone or removed |
+| `sendFeedback` | `from('app_feedback').insert({ name, feedback })` |
 
-The app does not use Supabase auth, storage or realtime. Its two RPCs are `delete_bin` and `update_bin`.
+The app does not use Supabase auth, storage or realtime.
 
 **Service worker problems found during review** (they affect the cutover, so Phase 0 fixes them first):
 
@@ -95,7 +99,7 @@ Source: Cloudflare docs, checked 2026-11-19. Recheck before starting.
 | # | Decision | Options | Recommendation |
 |---|---|---|---|
 | D1 | Public URL | (a) free `*.workers.dev` subdomain; (b) a custom domain | Use (a) unless you already own a domain. Note that an origin change means PWA users must reinstall from the new URL (see Phase 7). |
-| D2 | Delete rules | (a) same as today, anyone can delete; (b) only whoever added the bin, plus an admin key; (c) admin only | Ship (a) first so the migration changes as little as possible, then do (b) in Phase 8. |
+| D2 | Delete rules | Decided on 2026-11-24: nobody deletes directly; bins are removed by votes (see [DATA_MODEL.md](DATA_MODEL.md)). | Port the voting rules unchanged. |
 | D3 | IDs | keep UUID text, or switch to integers | Keep UUID text. Existing IDs survive unchanged and the Worker generates them with `crypto.randomUUID()`. |
 | D4 | How deploys happen | (a) Workers Builds (Cloudflare's Git integration, deploys on push); (b) `npm run deploy` from your machine | (a), with manual deploys as a fallback. |
 | D5 | Old Vercel URL after cutover | (a) keep a redirect + service-worker kill switch on Vercel; (b) delete the project | (a), for at least a few months, so shared links and installed PWAs still lead somewhere. |
@@ -254,9 +258,23 @@ Each phase ends in a working app, so you can stop between any two.
      bin_type    TEXT NOT NULL DEFAULT 'public' CHECK (bin_type IN ('public', 'private')),
      title       TEXT,
      description TEXT,
-     created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+     created_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+     status      TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'removed')),
+     removed_at  TEXT,
+     upvotes     INTEGER NOT NULL DEFAULT 0,
+     downvotes   INTEGER NOT NULL DEFAULT 0
    );
    CREATE INDEX bins_created_at_idx ON bins (created_at DESC);
+
+   CREATE TABLE bin_votes (
+     bin_id     TEXT NOT NULL REFERENCES bins (id) ON DELETE CASCADE,
+     voter_id   TEXT NOT NULL,
+     vote       INTEGER NOT NULL CHECK (vote IN (-1, 1)),
+     created_at TEXT NOT NULL,
+     updated_at TEXT NOT NULL,
+     PRIMARY KEY (bin_id, voter_id)
+   );
+   CREATE INDEX bin_votes_voter_idx ON bin_votes (voter_id, updated_at DESC);
 
    CREATE TABLE app_feedback (
      id         TEXT PRIMARY KEY,
@@ -278,28 +296,35 @@ Each phase ends in a working app, so you can stop between any two.
    Length limits stay in the Worker, not in `CHECK`s, so an old long row can't break the import.
 3. `npm run db:migrate:local`, then `npm run db:migrate:remote`.
 
-**Done when:** `npx wrangler d1 execute bin-there-db --remote --command "SELECT name FROM sqlite_master WHERE type='table'"` lists `bins` and `app_feedback` (plus D1's internal tables).
+**Done when:** `npx wrangler d1 execute bin-there-db --remote --command "SELECT name FROM sqlite_master WHERE type='table'"` lists `bins`, `bin_votes` and `app_feedback` (plus D1's internal tables).
 
 ### Phase 4: Worker API (medium)
 
-**API contract.** The JSON shapes match today's Supabase rows, so the map rendering code doesn't change.
+**API contract.** The JSON shapes match today's Supabase rows, so the provider in Phase 5 can reuse the same row-to-bin mapping. The rules (votes, removal, limits) are in [DATA_MODEL.md](DATA_MODEL.md).
 
 | Method | Path | Body | Success | Errors |
 |---|---|---|---|---|
-| GET | `/api/bins` | none | `200` array of bins, newest first | `500` |
-| POST | `/api/bins` | `{ latitude, longitude, bin_type?, title?, description? }` | `201` the created bin | `400` validation, `413` too large |
-| PATCH | `/api/bins/:id` | `{ latitude, longitude, bin_type, title?, description? }` | `200` the updated bin | `400`, `404` already gone, `413` |
-| DELETE | `/api/bins/:id` | none | `204` | `404` already gone |
+| GET | `/api/bins` | none | `200` array of active bins (with `upvotes`, `downvotes`), newest first | `500` |
+| GET | `/api/votes?voter=<uuid>` | none | `200` array of `{ bin_id, vote }` for active bins | `400` |
+| POST | `/api/bins` | `{ latitude, longitude, bin_type?, title?, description?, voter }` | `201` the created bin, with the voter's upvote | `400` validation, `413` too large |
+| PATCH | `/api/bins/:id` | `{ latitude, longitude, bin_type, title?, description? }` | `200` the updated bin | `400`, `404` gone or removed, `413`, `429` |
+| POST | `/api/bins/:id/vote` | `{ voter, vote }` (`vote` is 1, -1 or 0) | `200 { upvotes, downvotes, my_vote, status }` | `400`, `404` gone or removed, `429` |
 | POST | `/api/feedback` | `{ name?, feedback }` | `201 { ok: true }` | `400`, `413` |
 | GET | `/api/health` | none | `200 { ok: true }` | none |
+
+There is no `DELETE`: bins are removed by votes.
 
 Every error has the shape `{ "error": { "message": "..." } }`, and every response sends `Cache-Control: no-store`.
 
 **Validation rules:** latitude must be a number from -90 to 90 and longitude from -180 to 180; `bin_type` must be `public` or `private` (default `public`); text is trimmed and an empty string becomes `null`; title is at most 80 characters, description 500, name 80, and feedback 1 to 2,000; the request body is at most 10 KB.
 
-**Delete and edit parity.** On Supabase, `delete_bin()` allows at most 30 deletes an hour and copies each deleted bin to `deleted_bins`, and `update_bin()` allows 60 edits an hour and copies the old version to `bin_edits`. The `deleteBin` below does neither, and the starting point has no `PATCH` handler yet. Add one that validates like `createBin` and runs `UPDATE bins SET ... WHERE id = ?` (`404` when `meta.changes === 0`). To keep the protections, add `deleted_bins` and `bin_edits` tables in Phase 3 and do the same count and copy here; otherwise accept losing them until Phase 8.
+**Rules parity.** Supabase enforces the rules in [DATA_MODEL.md](DATA_MODEL.md) inside its functions; the Worker must do the same:
+- `POST /api/bins` stores the bin and the creator's upvote (`upvotes = 1`) in one `env.DB.batch([...])`.
+- `POST /api/bins/:id/vote` checks the bin is active and the voter is under 60 votes in the last hour, then in one batch upserts or deletes the vote (`INSERT ... ON CONFLICT (bin_id, voter_id) DO UPDATE`), recounts with `SUM(CASE ...)`, and updates the bin's totals, setting `status = 'removed'` when the removal rule is met (and fewer than 30 bins were removed in the last hour).
+- `PATCH` validates like `createBin` and updates only active bins (`404` when `meta.changes === 0`); to keep edit history, add a `bin_edits` table and copy the old row first.
+- Lists and votes only ever show active bins.
 
-**`worker/index.js` starting point:**
+**`worker/index.js` starting point.** Written before voting: replace `deleteBin` and its `DELETE` route with the vote, my-votes and `PATCH` handlers above, and have `listBins` filter `WHERE status = 'active'`.
 
 ```js
 const HEADERS = {
@@ -427,62 +452,42 @@ export default {
 
 **Done when:** with `npm run dev` running, the API answers correctly when tested with `curl` or the browser:
 - `GET /api/bins` returns `[]`;
-- `POST` a bin, then `GET` shows it;
-- `DELETE` it returns 204, and a second `DELETE` returns 404;
+- `POST` a bin, then `GET` shows it with one upvote;
+- downvotes from four other voter ids remove it (4 down beats the creator's 1 up by 3), after which `GET` leaves it out and voting on it returns 404;
 - a bad latitude returns 400 with a readable message;
 - `POST /api/feedback` stores a row.
 
-### Phase 5: Frontend switch (medium)
+### Phase 5: Frontend switch (small)
 
-1. Add `src/lib/api.js`. It returns the same `{ data, error }` shape the component already handles:
+The app already reaches its data only through `src/lib/data`, so the switch is a new provider; `BinMap.jsx` doesn't change.
+
+1. Add `src/lib/data/cloudflareProvider.js`, exporting `isConfigured` and the six functions in [DATA_MODEL.md](DATA_MODEL.md), each returning `{ data, error }`:
    ```js
-   async function request(path, { body, ...options } = {}) {
+   export const isConfigured = true; // same-origin API, nothing to configure
+
+   async function request(path, { body, signal, ...options } = {}) {
      try {
        const response = await fetch(path, {
          ...options,
+         signal,
          headers: body ? { 'content-type': 'application/json' } : undefined,
          body: body ? JSON.stringify(body) : undefined,
        });
-
-       if (response.status === 204) return { data: null, error: null };
-
        const payload = await response.json().catch(() => null);
-       if (!response.ok) {
-         return {
-           data: null,
-           error: {
-             status: response.status,
-             message: payload?.error?.message || `Request failed (HTTP ${response.status}).`,
-           },
-         };
-       }
-       return { data: payload, error: null };
-     } catch {
-       return {
-         data: null,
-         error: { status: 0, message: 'Could not reach the server. Check your connection and try again.' },
-       };
+       if (response.ok) return { data: payload, error: null };
+       if (response.status === 404) return { data: null, error: null }; // gone or removed
+       const code = response.status === 429 ? 'limited' : response.status === 400 ? 'invalid' : 'unknown';
+       return { data: null, error: { code, message: payload?.error?.message || 'Something went wrong. Please try again.' } };
+     } catch (error) {
+       if (error.name === 'AbortError') return { data: null, error: { code: 'aborted', message: '' } };
+       return { data: null, error: { code: 'network', message: 'Could not reach the server. Check your connection and try again.' } };
      }
    }
-
-   export const listBins = () => request('/api/bins');
-   export const createBin = (bin) => request('/api/bins', { method: 'POST', body: bin });
-   export const deleteBin = (id) => request(`/api/bins/${encodeURIComponent(id)}`, { method: 'DELETE' });
-   export const sendFeedback = (entry) => request('/api/feedback', { method: 'POST', body: entry });
    ```
-2. Edit `src/components/BinMap.jsx`:
-   - **Imports:** `import * as api from '../lib/api';` instead of Supabase, and call `api.listBins()` and so on. A plain named import would clash, because `BinMap.jsx` already has its own `deleteBin` function.
-   - **Error helpers:** delete `getMissingFunctionMessage`, `getSupabaseErrorMessage`, `getMissingBinColumn`, `getDeleteErrorMessage`, `getEditErrorMessage` and `getFeedbackErrorMessage`. Use `error.message` (already user-friendly) with the existing fallback text.
-   - **`buildBinPayload`:** simplify it (the `includeBinType` / `includeOptionalFields` options only existed for the legacy fallback).
-   - **Remove the `isSupabaseConfigured` guards** in `loadBins`, `markNewBin`, `deleteBin` and `handleFeedbackSubmit`. With a same-origin API there's no config to miss.
-   - **`loadBins`:** `const { data, error } = await api.listBins();` and delete `fetchAllBins`; the Worker returns every row in one response.
-   - **`handleSaveDraftBin`:** `const { data, error } = await api.createBin(buildBinPayload(draftBin));` and drop the legacy-insert block.
-   - **`saveBinChanges`:** `const { data, error } = await api.updateBin(draft.id, { latitude, longitude, bin_type, title, description });` (add `updateBin` to `src/lib/api.js` as a `PATCH`). Treat `error.status === 404` the way an empty result is handled now.
-   - **`deleteBin`:** replace the `supabase.rpc('delete_bin', ...)` call with `const { error } = await api.deleteBin(binId);`. Treat `error.status === 404` the way `wasDeleted === false` is handled now: remove the bin from the list and show "This bin had already been removed."
-   - **`handleFeedbackSubmit`:** `await api.sendFeedback({ name: ..., feedback: ... })`.
-   - **Rendering (the `BinMarker` markers and the bin sheet) stays the same**, because the field names (`id`, `latitude`, `longitude`, `bin_type`, `title`, `description`) are unchanged.
-3. Remove Supabase from the frontend: delete `src/lib/supabase.js`, run `npm uninstall @supabase/supabase-js`, and remove both vars from `.env.example` (delete the file if nothing is left).
-4. Keep `supabase/schema.sql` until Phase 9 as a record of the old setup.
+   Then build the six functions on `request`, converting rows to the app's `Bin` shape the same way `toBin` in `supabaseProvider.js` does (`bin_type` to `binType`, and so on). `voteOnBin` returns `{ upvotes, downvotes, myVote, removed }`; `listMyVotes` returns `{ [binId]: vote }`.
+2. Register it in `providers` in `src/lib/data/index.js` and set `VITE_DATA_PROVIDER=cloudflare` in the build (or make it the default).
+3. Remove Supabase from the frontend: delete `supabaseProvider.js` and its entry, run `npm uninstall @supabase/supabase-js`, and remove the Supabase vars from `.env.example`.
+4. Keep `supabase/migrations` until Phase 9 as a record of the old setup.
 
 **Done when:** every item in the local test checklist (section 7) passes under `npm run dev`, then again under `npm run build && npx vite preview`, which runs the build in the real Workers runtime.
 
@@ -491,15 +496,16 @@ export default {
 1. **Export from Supabase.** In the Supabase SQL Editor run each query and save the single JSON result to a file:
    ```sql
    select json_agg(b order by created_at) from public.bins b;          -- save as migration-data/bins.json
+   select json_agg(v order by created_at) from public.bin_votes v;     -- save as migration-data/votes.json
    select json_agg(f order by created_at) from public.app_feedback f;  -- save as migration-data/feedback.json
    ```
-   Also record `select count(*) from public.bins;` and the same for `app_feedback`, plus the export time. `migration-data/` is gitignored because feedback can contain names.
+   Export removed bins too: they keep their votes and can be restored. Also record `select count(*) from public.bins;` and the same for `bin_votes` and `app_feedback`, plus the export time. `migration-data/` is gitignored because feedback can contain names.
 2. **Convert to D1 SQL** with a small script, `scripts/supabase-json-to-d1.mjs`. It writes the file itself, because PowerShell `>` can add a BOM that breaks the import:
    ```js
-   // node scripts/supabase-json-to-d1.mjs migration-data/bins.json migration-data/feedback.json migration-data/import.sql
+   // node scripts/supabase-json-to-d1.mjs migration-data/bins.json migration-data/votes.json migration-data/feedback.json migration-data/import.sql
    import { readFileSync, writeFileSync } from 'node:fs';
 
-   const [binsFile, feedbackFile, outFile] = process.argv.slice(2);
+   const [binsFile, votesFile, feedbackFile, outFile] = process.argv.slice(2);
    const load = (file) => JSON.parse(readFileSync(file, 'utf8')) ?? [];
    const iso = (value) => new Date(value).toISOString();
 
@@ -515,8 +521,12 @@ export default {
    const lines = [];
    for (const b of load(binsFile)) {
      const values = [b.id, b.latitude, b.longitude, b.bin_type === 'private' ? 'private' : 'public',
-       b.title, b.description, iso(b.created_at)];
-     lines.push(`INSERT OR IGNORE INTO bins (id, latitude, longitude, bin_type, title, description, created_at) VALUES (${values.map(sql).join(', ')});`);
+       b.title, b.description, iso(b.created_at), b.status, b.removed_at && iso(b.removed_at), b.upvotes, b.downvotes];
+     lines.push(`INSERT OR IGNORE INTO bins (id, latitude, longitude, bin_type, title, description, created_at, status, removed_at, upvotes, downvotes) VALUES (${values.map(sql).join(', ')});`);
+   }
+   for (const v of load(votesFile)) {
+     const values = [v.bin_id, v.voter_id, v.vote, iso(v.created_at), iso(v.updated_at)];
+     lines.push(`INSERT OR IGNORE INTO bin_votes (bin_id, voter_id, vote, created_at, updated_at) VALUES (${values.map(sql).join(', ')});`);
    }
    for (const f of load(feedbackFile)) {
      const values = [f.id, f.name, f.feedback, iso(f.created_at)];
@@ -531,7 +541,7 @@ export default {
 3. **Rehearse locally:** run `npx wrangler d1 execute bin-there-db --local --file=migration-data/import.sql`, open `npm run dev`, and check that the map looks the same as production.
 4. **Verify counts** (local now, remote at cutover):
    ```bash
-   npx wrangler d1 execute bin-there-db --local --command "SELECT (SELECT count(*) FROM bins) AS bins, (SELECT count(*) FROM app_feedback) AS feedback, (SELECT max(created_at) FROM bins) AS newest"
+   npx wrangler d1 execute bin-there-db --local --command "SELECT (SELECT count(*) FROM bins) AS bins, (SELECT count(*) FROM bin_votes) AS votes, (SELECT count(*) FROM app_feedback) AS feedback, (SELECT max(created_at) FROM bins) AS newest"
    ```
 
 **Done when:** the local counts match the Supabase counts and a few spot-checked bins match field for field.
@@ -587,14 +597,8 @@ export default {
 
 Pick these up one at a time once the move has settled.
 
-1. **Delete protection (decision D2 → b).**
-   - Add a migration with a `delete_token_hash TEXT` column on `bins`.
-   - `POST /api/bins` generates a random token, stores its SHA-256 hash and returns the token once. The app keeps it in `localStorage` keyed by bin id.
-   - `DELETE` requires header `X-Delete-Token` whose hash matches the stored one, **or** `Authorization: Bearer <ADMIN_TOKEN>`.
-   - Set the admin token with `npx wrangler secret put ADMIN_TOKEN`; use `.dev.vars` locally.
-   - Imported bins have no token, so only the admin key can delete them.
-   - The UI shows the delete button only for bins this browser created, plus a "report as missing" link for the rest. That link could later write to `app_feedback`.
-2. **Bot protection:** add Cloudflare Turnstile (free) to the add-bin and feedback forms and verify the token in the Worker.
+1. **Harder-to-fake votes.** Voter ids are anonymous browser ids, so one person can vote several times by clearing site data (see [DATA_MODEL.md](DATA_MODEL.md)). In the Worker, also cap votes per IP address (`request.headers.get('cf-connecting-ip')`, stored hashed), and count at most one downvote per IP per bin towards removal.
+2. **Bot protection:** add Cloudflare Turnstile (free) to the add-bin, vote and feedback requests and verify the token in the Worker.
 3. **Rate limiting:** cap creates per IP per minute. Check which Cloudflare rate-limiting options the free plan includes at the time.
 4. **Scale the bin list only if needed:** add `GET /api/bins?bbox=minLng,minLat,maxLng,maxLat` with an index on `(latitude, longitude)`, so each page load reads only the bins in view instead of the whole table.
 
@@ -602,7 +606,7 @@ Pick these up one at a time once the move has settled.
 
 - [ ] Download a final Supabase backup (Database > Backups, or `pg_dump`), then delete the Supabase project.
 - [ ] Delete `.github/workflows/keep-supabase-awake.yml` and its two repo secrets.
-- [ ] Delete `supabase/schema.sql` (the schema now lives in `migrations/`).
+- [ ] Delete `supabase/migrations` (the schema now lives in `migrations/`).
 - [ ] Keep the Vercel redirect project (D5) for a few months, then make the redirect permanent or remove it.
 - [ ] Update `README.md`: stack, local setup (`npm run db:migrate:local && npm run dev`), deploy steps, how to read feedback and how to back up.
 - [ ] Add a `CHANGELOG.md` entry for the migration.
@@ -618,8 +622,9 @@ Run it locally (`npm run dev`, then `npx vite preview`) and again on the deploye
 - [ ] Clicking the map opens the draft form; saving a **public** bin with a title and description shows it immediately.
 - [ ] Saving a **private** bin with empty title and description shows "Waste bin" / "No description added."
 - [ ] Editing a bin from its details sheet saves the change; a reload confirms it.
-- [ ] Deleting a bin (after "Delete" in the sheet's confirmation) removes it; a reload confirms it's gone.
-- [ ] Deleting a bin already removed in another tab shows a clear message, not a crash.
+- [ ] A new bin shows one thumbs up (yours). Voting up, down and taking the vote back update the counts; a reload keeps your vote.
+- [ ] Downvotes from enough browsers (for example several private windows) remove a bin; a reload confirms it's gone.
+- [ ] Voting on a bin removed in another tab shows a clear message, not a crash.
 - [ ] Feedback with and without a name shows the thank-you message, and the row is in D1.
 - [ ] "Find nearest bin" works over HTTPS, and the place name in the top bar updates (Nominatim still reachable).
 
@@ -666,7 +671,7 @@ Keep Supabase and the ping workflow running until Phase 9, so rolling back is al
 |---|---|---|
 | Returning users stay on the old cached build and keep writing to Supabase | High without Phase 0 | Phase 0 service-worker fix, the kill-switch `sw.js` on Vercel and the delta check (7b step 5). |
 | Node or Vite upgrade breaks the build | Medium | Done alone in Phase 1 and verified on Vercel before any Cloudflare work. |
-| Open write/delete API gets abused | Low to medium (same as today) | Phase 8 hardening; Time Travel to undo damage. |
+| Open write and vote API gets abused (for example fake downvotes) | Low to medium (same as today) | Hourly limits, restorable removals, Phase 8 hardening; Time Travel to undo damage. |
 | Daily D1 read limit as the bin count grows | Low for now | Track the bin count; Phase 8 step 4 (map-area query). |
 | Installed PWAs on the vercel.app origin | Certain if the URL changes | Redirect + kill switch; reinstall prompt. A custom domain avoids this for future moves. |
 | Free-plan terms change | Possible | Recheck the Cloudflare limits pages before starting; the free plan has no overage charges. |
@@ -685,11 +690,11 @@ Keep Supabase and the ping workflow running until Phase 9, so rolling back is al
 | `worker/index.js` | New: API routes |
 | `migrations/0001_init.sql` | New: D1 schema |
 | `scripts/supabase-json-to-d1.mjs` | New: one-off data conversion |
-| `src/lib/api.js` | New: fetch wrapper |
-| `src/lib/supabase.js` | Delete |
-| `src/components/BinMap.jsx` | Swap the four data calls; remove the Supabase-specific error handling and config guards |
+| `src/lib/data/cloudflareProvider.js` | New: the data functions over `fetch` |
+| `src/lib/data/index.js` | Register the new provider (and make it the default) |
+| `src/lib/data/supabaseProvider.js` | Delete |
 | `.env.example` | Remove the Supabase vars |
 | `.gitignore` | Add `.wrangler`, `.dev.vars*`, `migration-data/` |
 | `legacy-vercel/vercel.json`, `legacy-vercel/sw.js` | New (only if moving off a vercel.app URL) |
 | `README.md`, `CHANGELOG.md` | Update in Phase 9 |
-| `.github/workflows/keep-supabase-awake.yml`, `supabase/schema.sql` | Delete in Phase 9 |
+| `.github/workflows/keep-supabase-awake.yml`, `supabase/migrations` | Delete in Phase 9 |

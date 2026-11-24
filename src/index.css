@@ -26,7 +26,6 @@
   --map-placeholder: #ece9e4;
 
   --danger: #b42318;
-  --danger-hover: #912018;
   --danger-soft: #fef3f2;
   --success: #067647;
   --success-soft: #ecfdf3;
@@ -155,15 +154,6 @@ button {
   background: var(--surface-muted-hover);
 }
 
-.button--danger {
-  background: var(--danger);
-  color: #ffffff;
-}
-
-.button--danger:hover:not(:disabled) {
-  background: var(--danger-hover);
-}
-
 .button--block {
   width: 100%;
 }
@@ -205,7 +195,7 @@ button {
   background: var(--surface-muted-hover);
 }
 
-/* Square grey buttons beside a primary button, such as Edit and Delete. */
+/* Square grey buttons beside a primary button, such as Edit. */
 .icon-button--tile {
   width: 48px;
   height: 48px;
@@ -214,10 +204,6 @@ button {
 
 .icon-button--tile:hover:not(:disabled) {
   background: var(--surface-muted-hover);
-}
-
-.icon-button--danger {
-  color: var(--danger);
 }
 
 /* ---------- Layout ---------- */
@@ -767,19 +753,76 @@ button {
   min-width: 0;
 }
 
-.sheet__confirm {
-  display: grid;
-  gap: 10px;
-  padding: 14px;
+/* "Is it usable?" with thumbs up and down. A pressed vote turns black. */
+.vote {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 10px 10px 14px;
   border-radius: 14px;
-  background: var(--danger-soft);
+  background: var(--surface-muted);
 }
 
-.sheet__confirm-text {
-  margin: 0;
-  color: var(--danger);
+.vote__text {
+  display: grid;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.vote__label {
+  color: var(--text-strong);
   font-size: 15px;
   font-weight: 600;
+}
+
+.vote__hint {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.vote__button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: 64px;
+  height: 44px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius-control);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  transition: background-color 160ms ease, color 160ms ease, transform 120ms ease;
+}
+
+.vote__button:hover:not(:disabled) {
+  background: var(--surface-muted-hover);
+}
+
+/* Repeated with :hover so a pressed vote stays black under the pointer, and
+   after a tap on phones, where hover sticks. */
+.vote__button[aria-pressed="true"],
+.vote__button[aria-pressed="true"]:hover:not(:disabled) {
+  background: var(--ink);
+  color: #ffffff;
+}
+
+.vote__button[aria-pressed="true"]:hover:not(:disabled) {
+  background: var(--ink-hover);
+}
+
+.vote__button:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.vote__button:disabled {
+  cursor: progress;
+  opacity: 0.6;
 }
 
 /* Public / private badge. */

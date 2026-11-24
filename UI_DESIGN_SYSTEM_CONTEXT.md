@@ -114,8 +114,8 @@ Use `8px`, `12px`, `16px`, `20px` and `24px`. Floating UI keeps 12px from the sc
 
 - **Primary:** black fill, white text, 48px tall. One per view.
 - **Secondary:** `surface-muted` fill, black text.
-- **Danger:** red fill, white text, only to confirm a delete. The first tap on delete is a grey icon button with a red icon.
-- **Icon buttons:** 44px (top bar), 48px tiles beside a primary button (Edit, Delete), 36px round grey for close.
+- **Icon buttons:** 44px (top bar), 48px tiles beside a primary button (Edit), 36px round grey for close.
+- **Vote buttons:** white thumbs-up and thumbs-down buttons with their counts, on a grey "Is it usable?" row. A pressed vote turns black (`aria-pressed`), even under the pointer; pressing it again takes the vote back.
 - Press feedback: scale to 0.98. Disabled: 50% opacity.
 - Every icon-only button has an `aria-label`.
 
@@ -155,7 +155,7 @@ One line-icon set (`src/components/icons.jsx`): 24px grid, 2px stroke, round cap
 
 ## Content Tone in UI
 
-Human, short and calm. Use sentence case and plain words ("Add bin", "Find nearest bin", "Keep it").
+Human, short and calm. Use sentence case and plain words ("Add bin", "Find nearest bin", "Is it usable?").
 
 ## Anti-Patterns
 

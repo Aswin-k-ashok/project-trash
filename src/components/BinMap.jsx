@@ -17,7 +17,16 @@ import {
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import { DEFAULT_CENTER, DEFAULT_ZOOM } from '../config';
-import { isSupabaseConfigured, supabase } from '../lib/supabase';
+import {
+  createBin,
+  isConfigured,
+  listBins,
+  listMyVotes,
+  sendFeedback,
+  updateBin,
+  voteOnBin,
+} from '../lib/data';
+import { getVoterId } from '../lib/voter';
 import InstallButton from './InstallButton';
 import {
   BinIcon,
@@ -28,7 +37,8 @@ import {
   MinusIcon,
   PencilIcon,
   PlusIcon,
-  TrashIcon,
+  ThumbsDownIcon,
+  ThumbsUpIcon,
   binIconMarkup,
 } from './icons';
 
@@ -44,7 +54,7 @@ function getBinType(binType) {
   return binType === BIN_TYPE_PRIVATE ? BIN_TYPE_PRIVATE : BIN_TYPE_PUBLIC;
 }
 
-// Same limits as the database checks in supabase/schema.sql.
+// Same limits as the database checks (supabase/migrations, DATA_MODEL.md).
 const MAX_TITLE_LENGTH = 80;
 const MAX_DESCRIPTION_LENGTH = 500;
 const MAX_FEEDBACK_NAME_LENGTH = 80;
@@ -54,8 +64,6 @@ const MAX_FEEDBACK_LENGTH = 2000;
 const DOUBLE_CLICK_WINDOW_MS = 300;
 // Close enough to see individual streets and the bins on them.
 const STREET_ZOOM = 16;
-// Supabase returns at most 1000 rows per request unless the project says otherwise.
-const BINS_PAGE_SIZE = 1000;
 // Nominatim's usage policy allows at most one request per second.
 const PLACE_LOOKUP_DELAY_MS = 1000;
 const SUCCESS_MESSAGE_MS = 4000;
@@ -259,125 +267,15 @@ function MapController({ targetLocation }) {
   return null;
 }
 
-function getMissingFunctionMessage(functionName) {
-  return `Supabase cannot find the '${functionName}' function. Run the latest SQL from supabase/schema.sql in your Supabase SQL Editor, then refresh the app.`;
-}
-
-function getSupabaseErrorMessage(error, fallbackMessage) {
-  if (!error) {
-    return fallbackMessage;
-  }
-
-  if (error.code === 'PGRST205') {
-    return "Supabase cannot find the 'bins' table. Run the SQL from supabase/schema.sql in your Supabase SQL Editor, then refresh the app.";
-  }
-
-  if (error.code === '23514') {
-    return 'Some of the details were not accepted, for example text that is too long. Please check them and try again.';
-  }
-
-  const missingColumnMatch = error.message?.match(
-    /Could not find the '([^']+)' column of 'bins' in the schema cache/i
-  );
-
-  if (missingColumnMatch) {
-    const missingColumn = missingColumnMatch[1];
-
-    return `Your Supabase 'bins' table is missing the '${missingColumn}' column. Run the latest SQL from supabase/schema.sql in the Supabase SQL Editor, then try again after the schema cache refreshes.`;
-  }
-
-  return error.message || fallbackMessage;
-}
-
-function getMissingBinColumn(error) {
-  const missingColumnMatch = error?.message?.match(
-    /Could not find the '([^']+)' column of 'bins' in the schema cache/i
-  );
-
-  return missingColumnMatch ? missingColumnMatch[1] : null;
-}
-
-function getDeleteErrorMessage(error) {
-  if (error?.code === 'PGRST202') {
-    return getMissingFunctionMessage('delete_bin');
-  }
-
-  return getSupabaseErrorMessage(
-    error,
-    'Could not delete the bin. Please try again.'
-  );
-}
-
-function getEditErrorMessage(error) {
-  if (error?.code === 'PGRST202') {
-    return getMissingFunctionMessage('update_bin');
-  }
-
-  return getSupabaseErrorMessage(
-    error,
-    'Could not save your changes. Please try again.'
-  );
-}
-
-function getFeedbackErrorMessage(error) {
-  if (error?.code === 'PGRST205') {
-    return "Supabase cannot find the 'app_feedback' table. Run the latest SQL from supabase/schema.sql in your Supabase SQL Editor, then refresh the app.";
-  }
-
-  return error?.message || 'Could not submit your feedback right now.';
-}
-
-function buildBinPayload(
-  draftBin,
-  {
-    includeBinType = true,
-    includeOptionalFields = true,
-  } = {}
-) {
-  const payload = {
-    latitude: draftBin.latitude,
-    longitude: draftBin.longitude,
+// The fields a user can set on a bin, in the shape the data layer expects.
+function toBinInput(draft) {
+  return {
+    latitude: draft.latitude,
+    longitude: draft.longitude,
+    binType: getBinType(draft.binType),
+    title: draft.title,
+    description: draft.description,
   };
-
-  if (includeBinType) {
-    payload.bin_type = getBinType(draftBin.binType);
-  }
-
-  if (includeOptionalFields) {
-    payload.title = draftBin.title.trim() || null;
-    payload.description = draftBin.description.trim() || null;
-  }
-
-  return payload;
-}
-
-// Supabase caps every response (1000 rows by default), so the table is read a
-// page at a time; otherwise the oldest bins would silently go missing.
-async function fetchAllBins(signal) {
-  const allBins = [];
-
-  for (;;) {
-    const { data, error, count } = await supabase
-      .from('bins')
-      .select('*', { count: 'exact' })
-      .order('created_at', { ascending: false })
-      .order('id')
-      .range(allBins.length, allBins.length + BINS_PAGE_SIZE - 1)
-      .abortSignal(signal);
-
-    if (error) {
-      return { data: null, error };
-    }
-
-    allBins.push(...data);
-
-    const hasEverything =
-      data.length === 0 || (count !== null && allBins.length >= count);
-
-    if (hasEverything) {
-      return { data: allBins, error: null };
-    }
-  }
 }
 
 // Memoized so that moving the map or typing in a form doesn't re-render every
@@ -413,7 +311,7 @@ const BinMarker = memo(function BinMarker({
     }),
     [bin.id, onSelect]
   );
-  const binType = getBinType(bin.bin_type);
+  const { binType } = bin;
   const title = bin.title || 'Waste bin';
 
   return (
@@ -433,7 +331,11 @@ function BinMap() {
   const [bins, setBins] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-  const [deletingBinId, setDeletingBinId] = useState(null);
+  // The bin whose vote is being saved.
+  const [votingBinId, setVotingBinId] = useState(null);
+  // This device's votes, as { [binId]: 1 | -1 }.
+  const [myVotes, setMyVotes] = useState({});
+  const [voterId] = useState(getVoterId);
   const [isLocating, setIsLocating] = useState(false);
   const [isSubmittingFeedback, setIsSubmittingFeedback] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
@@ -444,8 +346,6 @@ function BinMap() {
   const [draftBin, setDraftBin] = useState(null);
   // The bin whose details are open in the sheet.
   const [selectedBinId, setSelectedBinId] = useState(null);
-  // The bin whose delete is waiting for a second, confirming tap.
-  const [confirmingDeleteId, setConfirmingDeleteId] = useState(null);
   const [userLocation, setUserLocation] = useState(null);
   const [isNearestBinDismissed, setIsNearestBinDismissed] = useState(false);
   const [isFeedbackOpen, setIsFeedbackOpen] = useState(false);
@@ -465,15 +365,12 @@ function BinMap() {
   const legendRef = useRef(null);
   const sheetHeadingRef = useRef(null);
   const binFormRef = useRef(null);
-  const confirmKeepRef = useRef(null);
-  const deleteButtonRef = useRef(null);
   const markerRefs = useRef(new Map());
-  const deletingBinIdRef = useRef(null);
+  const votingBinIdRef = useRef(null);
   const isDraftOpenRef = useRef(false);
   const focusFormOnOpenRef = useRef(false);
   const focusSheetOnSelectRef = useRef(false);
   const focusMarkerOnCloseRef = useRef(null);
-  const focusDeleteOnCancelRef = useRef(false);
   const feedbackTriggerRef = useRef(null);
   const feedbackDialogRef = useRef(null);
   const feedbackCloseTimerRef = useRef(null);
@@ -488,8 +385,6 @@ function BinMap() {
     () => bins.find((bin) => bin.id === selectedBinId) ?? null,
     [bins, selectedBinId]
   );
-  const isConfirmingDelete =
-    selectedBin !== null && confirmingDeleteId === selectedBin.id;
 
   // A new array on every render would make react-leaflet move the draft marker
   // back to the stored position, even in the middle of a drag.
@@ -582,7 +477,6 @@ function BinMap() {
     }
 
     focusSheetOnSelectRef.current = true;
-    setConfirmingDeleteId(null);
     setSelectedBinId(binId);
   }, []);
 
@@ -667,18 +561,6 @@ function BinMap() {
   }, [selectedBinId]);
 
   useEffect(() => {
-    if (confirmingDeleteId) {
-      confirmKeepRef.current?.focus({ preventScroll: true });
-      return;
-    }
-
-    if (focusDeleteOnCancelRef.current) {
-      focusDeleteOnCancelRef.current = false;
-      deleteButtonRef.current?.focus({ preventScroll: true });
-    }
-  }, [confirmingDeleteId]);
-
-  useEffect(() => {
     if (!successMessage) {
       return undefined;
     }
@@ -697,42 +579,40 @@ function BinMap() {
     const controller = new AbortController();
 
     async function loadBins() {
-      if (!isSupabaseConfigured) {
-        setErrorMessage(
-          'Supabase is not configured yet. Add VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY to your .env file.'
-        );
-        setIsLoading(false);
-        return;
-      }
-
       setIsLoading(true);
       setErrorMessage('');
 
-      const { data, error } = await fetchAllBins(controller.signal);
+      const options = { signal: controller.signal };
+      const [binsResult, votesResult] = await Promise.all([
+        listBins(options),
+        listMyVotes(voterId, options),
+      ]);
 
       if (controller.signal.aborted) {
         return;
       }
 
-      if (error) {
-        setErrorMessage(
-          getSupabaseErrorMessage(
-            error,
-            'Could not load bins. Check your Supabase setup.'
-          )
-        );
-        setIsLoading(false);
+      setIsLoading(false);
+
+      if (binsResult.error) {
+        setErrorMessage(binsResult.error.message);
         return;
       }
 
-      setBins(data);
-      setIsLoading(false);
+      setBins(binsResult.data);
+
+      // The map is still useful without them, so only say so.
+      if (votesResult.error) {
+        setErrorMessage(votesResult.error.message);
+      } else {
+        setMyVotes(votesResult.data);
+      }
     }
 
     loadBins();
 
     return () => controller.abort();
-  }, []);
+  }, [voterId]);
 
   useEffect(() => {
     const cacheKey = `${mapCenter.lat.toFixed(2)},${mapCenter.lng.toFixed(2)}`;
@@ -812,9 +692,9 @@ function BinMap() {
   useEffect(() => () => window.clearTimeout(feedbackCloseTimerRef.current), []);
 
   function markNewBin(latlng) {
-    if (!isSupabaseConfigured) {
+    if (!isConfigured) {
       setErrorMessage(
-        'You need to configure Supabase before adding bins from the map.'
+        'The database is not configured yet, so bins cannot be added. See the README.'
       );
       return;
     }
@@ -825,7 +705,6 @@ function BinMap() {
 
     setErrorMessage('');
     setSelectedBinId(null);
-    setConfirmingDeleteId(null);
     // Tapping again while a draft is open moves the pin and keeps what was typed.
     setDraftBin((currentDraft) => ({
       binType: BIN_TYPE_PUBLIC,
@@ -873,24 +752,17 @@ function BinMap() {
     }
 
     setSelectedBinId(null);
-    setConfirmingDeleteId(null);
-  }
-
-  function cancelDelete() {
-    focusDeleteOnCancelRef.current = true;
-    setConfirmingDeleteId(null);
   }
 
   function startEditingBin(bin) {
     setSelectedBinId(null);
-    setConfirmingDeleteId(null);
     focusFormOnOpenRef.current = true;
     setErrorMessage('');
     setDraftBin({
       id: bin.id,
       latitude: bin.latitude,
       longitude: bin.longitude,
-      binType: getBinType(bin.bin_type),
+      binType: bin.binType,
       title: bin.title ?? '',
       description: bin.description ?? '',
     });
@@ -928,11 +800,7 @@ function BinMap() {
     if (sheetMode === 'form') {
       handleCancelDraft();
     } else if (sheetMode === 'bin') {
-      if (isConfirmingDelete) {
-        cancelDelete();
-      } else {
-        closeSelectedBin();
-      }
+      closeSelectedBin();
     } else if (sheetMode === 'nearest') {
       setIsNearestBinDismissed(true);
     }
@@ -1014,86 +882,40 @@ function BinMap() {
     setIsSaving(true);
     setErrorMessage('');
 
-    const { data, error } = await supabase
-      .from('bins')
-      .insert(buildBinPayload(draftBin))
-      .select()
-      .single();
+    const { data: newBin, error } = await createBin(toBinInput(draftBin), voterId);
+
+    setIsSaving(false);
 
     if (error) {
-      const missingColumn = getMissingBinColumn(error);
-
-      if (
-        missingColumn === 'title' ||
-        missingColumn === 'description' ||
-        missingColumn === 'bin_type'
-      ) {
-        const legacyInsert = await supabase
-          .from('bins')
-          .insert(
-            buildBinPayload(draftBin, {
-              includeBinType: missingColumn !== 'bin_type',
-              includeOptionalFields: false,
-            })
-          )
-          .select()
-          .single();
-
-        if (!legacyInsert.error) {
-          setBins((currentBins) => [legacyInsert.data, ...currentBins]);
-          setDraftBin(null);
-          setErrorMessage(
-            `The bin was saved, but your Supabase table is still missing the '${missingColumn}' column. Run supabase/schema.sql so bin types, titles, and descriptions can be stored too.`
-          );
-          setIsSaving(false);
-          return;
-        }
-      }
-
-      setErrorMessage(
-        getSupabaseErrorMessage(
-          error,
-          'Could not save the new bin. Please try again.'
-        )
-      );
-      setIsSaving(false);
+      setErrorMessage(error.message);
       return;
     }
 
-    setBins((currentBins) => [data, ...currentBins]);
+    // Adding a bin also gives it this device's upvote.
+    setBins((currentBins) => [newBin, ...currentBins]);
+    setMyVotes((currentVotes) => ({ ...currentVotes, [newBin.id]: 1 }));
     setDraftBin(null);
-    showSavedBin(data.id);
+    showSavedBin(newBin.id);
     setSuccessMessage('Bin added. Thanks for helping!');
-    setIsSaving(false);
   }
 
-  // Edits go through a database function that changes one bin per call and
-  // keeps the old version; see update_bin() in supabase/schema.sql.
   async function saveBinChanges(draft) {
     setIsSaving(true);
     setErrorMessage('');
 
-    const { data, error } = await supabase.rpc('update_bin', {
-      bin_id: draft.id,
-      new_latitude: draft.latitude,
-      new_longitude: draft.longitude,
-      new_bin_type: getBinType(draft.binType),
-      new_title: draft.title,
-      new_description: draft.description,
-    });
+    const { data: updatedBin, error } = await updateBin(draft.id, toBinInput(draft));
 
     setIsSaving(false);
 
     if (error) {
-      setErrorMessage(getEditErrorMessage(error));
+      setErrorMessage(error.message);
       return;
     }
 
-    const updatedBin = data?.[0];
     setDraftBin(null);
 
     if (!updatedBin) {
-      setBins((currentBins) => currentBins.filter((bin) => bin.id !== draft.id));
+      removeBinFromMap(draft.id);
       setErrorMessage('This bin had already been removed.');
       return;
     }
@@ -1105,58 +927,61 @@ function BinMap() {
     setSuccessMessage('Changes saved.');
   }
 
-  async function deleteBin(binId) {
-    if (!isSupabaseConfigured) {
-      setErrorMessage(
-        'You need to configure Supabase before deleting bins from the map.'
-      );
-      return;
-    }
-
-    // Ignore a second tap while a delete is already running.
-    if (deletingBinIdRef.current) {
-      return;
-    }
-
-    deletingBinIdRef.current = binId;
-    setDeletingBinId(binId);
-    setErrorMessage('');
-
-    // Deletes go through a database function that removes one bin per call
-    // and keeps a copy; see delete_bin() in supabase/schema.sql.
-    const { data: wasDeleted, error } = await supabase.rpc('delete_bin', {
-      bin_id: binId,
-    });
-
-    deletingBinIdRef.current = null;
-    setDeletingBinId(null);
-    setConfirmingDeleteId(null);
-
-    if (error) {
-      setErrorMessage(getDeleteErrorMessage(error));
-      return;
-    }
-
+  function removeBinFromMap(binId) {
     setSelectedBinId((currentId) => (currentId === binId ? null : currentId));
     setBins((currentBins) => currentBins.filter((bin) => bin.id !== binId));
+    setMyVotes(({ [binId]: _removed, ...otherVotes }) => otherVotes);
+  }
 
-    if (wasDeleted) {
-      setSuccessMessage('Bin deleted.');
-    } else {
-      setErrorMessage('This bin had already been removed.');
+  // Votes 1 (usable) or -1 (not usable or missing). Pressing the same vote
+  // again takes it back. Enough downvotes remove the bin (see DATA_MODEL.md).
+  async function handleVote(bin, value) {
+    if (!isConfigured || votingBinIdRef.current) {
+      return;
     }
+
+    const nextVote = myVotes[bin.id] === value ? 0 : value;
+
+    votingBinIdRef.current = bin.id;
+    setVotingBinId(bin.id);
+    setErrorMessage('');
+
+    const { data: result, error } = await voteOnBin(bin.id, nextVote, voterId);
+
+    votingBinIdRef.current = null;
+    setVotingBinId(null);
+
+    if (error) {
+      setErrorMessage(error.message);
+      return;
+    }
+
+    if (!result) {
+      removeBinFromMap(bin.id);
+      setErrorMessage('This bin had already been removed.');
+      return;
+    }
+
+    if (result.removed) {
+      removeBinFromMap(bin.id);
+      setSuccessMessage('Thanks. Enough people said this bin isn’t usable, so it’s been removed from the map.');
+      return;
+    }
+
+    setBins((currentBins) =>
+      currentBins.map((currentBin) =>
+        currentBin.id === bin.id
+          ? { ...currentBin, upvotes: result.upvotes, downvotes: result.downvotes }
+          : currentBin
+      )
+    );
+    setMyVotes(({ [bin.id]: _previous, ...otherVotes }) =>
+      result.myVote ? { ...otherVotes, [bin.id]: result.myVote } : otherVotes
+    );
   }
 
   async function handleFeedbackSubmit(event) {
     event.preventDefault();
-
-    if (!isSupabaseConfigured) {
-      setFeedbackStatus({
-        tone: 'error',
-        text: 'Supabase is not configured yet. Add your environment variables before sending feedback.',
-      });
-      return;
-    }
 
     const feedbackText = feedbackForm.feedback.trim();
 
@@ -1172,13 +997,13 @@ function BinMap() {
     setIsSubmittingFeedback(true);
     setFeedbackStatus(null);
 
-    const { error } = await supabase.from('app_feedback').insert({
-      name: feedbackForm.name.trim() || null,
+    const { error } = await sendFeedback({
+      name: feedbackForm.name,
       feedback: feedbackText,
     });
 
     if (error) {
-      setFeedbackStatus({ tone: 'error', text: getFeedbackErrorMessage(error) });
+      setFeedbackStatus({ tone: 'error', text: error.message });
       setIsSubmittingFeedback(false);
       return;
     }
@@ -1219,7 +1044,6 @@ function BinMap() {
         setUserLocation(nextLocation);
         setMapCenter(nextLocation);
         setSelectedBinId(null);
-        setConfirmingDeleteId(null);
         setIsNearestBinDismissed(false);
         setIsLocating(false);
       },
@@ -1264,7 +1088,6 @@ function BinMap() {
   const statusLabels = [
     isLoading && 'Loading bins…',
     isSaving && (isEditing ? 'Saving changes…' : 'Saving new bin…'),
-    deletingBinId && 'Deleting bin…',
     isLocating && 'Finding your location…',
   ].filter(Boolean);
 
@@ -1352,11 +1175,13 @@ function BinMap() {
   }
 
   function renderBinSheet(bin) {
-    const binType = getBinType(bin.bin_type);
+    const { binType } = bin;
     const distance = userLocation
       ? getDistanceInMeters(userLocation, { lat: bin.latitude, lng: bin.longitude })
       : null;
-    const isDeleting = deletingBinId === bin.id;
+    const myVote = myVotes[bin.id] ?? 0;
+    const isVoting = votingBinId === bin.id;
+    const voteCount = (count) => `${count} ${count === 1 ? 'vote' : 'votes'}`;
 
     return (
       <>
@@ -1387,63 +1212,57 @@ function BinMap() {
           {bin.description || 'No description added.'}
         </p>
 
-        {isConfirmingDelete ? (
-          <div className="sheet__confirm" role="group" aria-labelledby="delete-confirm-text">
-            <p id="delete-confirm-text" className="sheet__confirm-text">
-              Delete this bin from the map?
-            </p>
-            <div className="sheet__actions">
-              <button
-                type="button"
-                ref={confirmKeepRef}
-                className="button button--secondary sheet__grow"
-                onClick={cancelDelete}
-                disabled={isDeleting}
-              >
-                Keep it
-              </button>
-              <button
-                type="button"
-                className="button button--danger sheet__grow"
-                onClick={() => deleteBin(bin.id)}
-                disabled={isDeleting}
-              >
-                {isDeleting ? 'Deleting…' : 'Delete'}
-              </button>
-            </div>
+        <div className="vote" role="group" aria-labelledby="vote-label">
+          <div className="vote__text">
+            <span id="vote-label" className="vote__label">Is it usable?</span>
+            <span className="vote__hint">Enough thumbs down removes it from the map.</span>
           </div>
-        ) : (
-          <div className="sheet__actions">
-            <a
-              className="button button--primary sheet__grow"
-              href={getDirectionsUrl(bin)}
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              <DirectionsIcon size={18} />
-              Directions
-            </a>
-            <button
-              type="button"
-              className="icon-button icon-button--tile"
-              onClick={() => startEditingBin(bin)}
-              aria-label="Edit bin"
-              title="Edit bin"
-            >
-              <PencilIcon />
-            </button>
-            <button
-              type="button"
-              ref={deleteButtonRef}
-              className="icon-button icon-button--tile icon-button--danger"
-              onClick={() => setConfirmingDeleteId(bin.id)}
-              aria-label="Delete bin"
-              title="Delete bin"
-            >
-              <TrashIcon />
-            </button>
-          </div>
-        )}
+          <button
+            type="button"
+            className="vote__button"
+            onClick={() => handleVote(bin, 1)}
+            disabled={isVoting}
+            aria-pressed={myVote === 1}
+            aria-label={`Usable, ${voteCount(bin.upvotes)}`}
+            title="Usable"
+          >
+            <ThumbsUpIcon size={18} />
+            <span aria-hidden="true">{bin.upvotes}</span>
+          </button>
+          <button
+            type="button"
+            className="vote__button"
+            onClick={() => handleVote(bin, -1)}
+            disabled={isVoting}
+            aria-pressed={myVote === -1}
+            aria-label={`Not usable or missing, ${voteCount(bin.downvotes)}`}
+            title="Not usable or missing"
+          >
+            <ThumbsDownIcon size={18} />
+            <span aria-hidden="true">{bin.downvotes}</span>
+          </button>
+        </div>
+
+        <div className="sheet__actions">
+          <a
+            className="button button--primary sheet__grow"
+            href={getDirectionsUrl(bin)}
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <DirectionsIcon size={18} />
+            Directions
+          </a>
+          <button
+            type="button"
+            className="icon-button icon-button--tile"
+            onClick={() => startEditingBin(bin)}
+            aria-label="Edit bin"
+            title="Edit bin"
+          >
+            <PencilIcon />
+          </button>
+        </div>
 
         <p className="sheet__coords">
           {bin.latitude.toFixed(5)}, {bin.longitude.toFixed(5)}
