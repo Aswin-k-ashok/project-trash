@@ -18,9 +18,10 @@ A minimal hobby-friendly waste bin locator built with React, Vite, Leaflet, Open
 - Tap a bin to see its details, edit it, or vote on whether it's usable (thumbs up or down)
 - Bins that enough people vote down are removed from the map; nobody can delete one on their own
 - Send suggestions and feedback from the top bar
+- Full-screen mode, which hides the browser's bars (where the browser allows it; on iPhone, install the app instead)
 - Install as an app (PWA)
 
-On phones, details and forms open in a sheet along the bottom of the screen; from 900px wide they open in a panel on the left.
+On phones the map takes almost the whole screen, and details and forms open in a sheet along the bottom; from 900px wide they open in a panel on the left.
 
 ## Project Structure
 
@@ -49,6 +50,7 @@ On phones, details and forms open in a sheet along the bottom of the screen; fro
     │       └── supabaseProvider.js
     └── components
         ├── BinMap.jsx
+        ├── FullscreenButton.jsx
         ├── InstallButton.jsx
         └── icons.jsx
 ```

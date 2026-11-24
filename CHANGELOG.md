@@ -37,6 +37,7 @@ Last updated: 2026-11-24 00:00:00 +0530
 - Added an "add a bin at the map centre" button, so bins can be added with the keyboard.
 - Added a "Find nearest bin" button to the sheet shown when nothing else is open.
 - Added voting: each bin's details ask "Is it usable?" with thumbs up and down. Whoever adds a bin gives it the first thumbs up. A bin is removed from the map once it has at least 3 thumbs down and 3 more down than up. Limits: 60 votes per device and 30 removals overall per hour.
+- Added a full-screen button to the top bar. It hides the browser's address bar and buttons, and shows only where the browser allows it (not on iPhone, where installing the app comes closest).
 - Added an anonymous voter id per browser (`src/lib/voter.js`), allowing one vote per bin per device without accounts.
 - Added `supabase/migrations`, numbered SQL files run once each in order, with a `schema_migrations` table recording which have run. `0002_votes.sql` adds the `bin_votes` table, bin `status`, `removed_at` and vote totals, and the `create_bin()`, `vote_on_bin()` and `my_votes()` functions.
 - Added a data layer (`src/lib/data`), the only code that talks to the backend, with the backend chosen by `VITE_DATA_PROVIDER` (default `supabase`), and `DATA_MODEL.md` describing the data and the rules any backend must enforce.
@@ -44,6 +45,13 @@ Last updated: 2026-11-24 00:00:00 +0530
 
 ### Changed
 - Redesigned the app around the map: it fills the screen, with a floating top bar (name, area, install and feedback buttons) and a sheet for bin details, the add/edit form and the nearest bin. On phones the sheet runs along the bottom; from 900px wide it sits in a panel on the left. This replaces the hero section, the map card and the map popups.
+- Changed the phone layout to leave far more of the screen to the map:
+  - nothing rests at the bottom until a bin, the nearest bin or a form is open; "Nearest bin" and "Add bin" float in the bottom corner instead of the "Find the nearest bin" card;
+  - the top bar is slimmer;
+  - the map key and attribution share one small row under the top bar;
+  - while a sheet is open, the map buttons shrink to icons;
+  - the bin sheet drops the coordinates and the voting hint.
+- Changed the map attribution to "© OpenStreetMap contributors" only, without Leaflet's prefix, so it fits beside the map key on phones.
 - Changed buttons to black (primary) and grey (secondary). All icons now come from one line-icon set.
 - Changed adding a bin to go through `create_bin()` instead of a direct insert, and `update_bin()` to edit only bins still on the map. The public API now lists only bins on the map and accepts no direct writes.
 - Changed database errors to show one plain message per kind of problem (setup, invalid input, rate limit, network) instead of Supabase-specific ones.
